@@ -59,7 +59,7 @@ export const WelcomeDashboard: React.FC = () => {
               <path d="M10 6.5h7a1.5 1.5 0 011.5 1.5V14" strokeWidth="1.5" stroke="#94a3b8" strokeDasharray="2 2" />
             </svg>
           </div>
-          <span className="brand-name">UML Workspace</span>
+          <span className="brand-name">UML</span>
         </div>
 
         <div className="dash-user-bar">
@@ -104,7 +104,7 @@ export const WelcomeDashboard: React.FC = () => {
             <button
               className="card-action-btn primary"
               onClick={() => {
-                setCustomProjectName(`Sistema_${projects.length + 1}`);
+                setCustomProjectName(`Nombre del proyecto`);
                 setIsCreateModalOpen(true);
               }}
             >
@@ -126,20 +126,6 @@ export const WelcomeDashboard: React.FC = () => {
               onClick={navigateToProjects}
             >
               Explorar Proyectos →
-            </button>
-          </div>
-
-          {/* Tarjeta: Generador de Código */}
-          <div className="dash-card">
-            <div className="card-icon-box purple">
-              <svg width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
-              </svg>
-            </div>
-            <h3>Generador de Código</h3>
-            <p>Exporta tus diagramas de clases a código fuente limpio.</p>
-            <button className="card-action-btn" onClick={() => toast('Disponible dentro del editor de diagramas')}>
-              Configurar Generador →
             </button>
           </div>
         </div>

@@ -9,15 +9,12 @@ export const UmlShowcase: React.FC = () => {
       <div className="uml-brand-header">
         <div className="uml-brand-badge">
           <span className="badge-pulse"></span>
-          <span>Arquitectura & Modelado UML</span>
+          <span>Modelado UML</span>
         </div>
         <h1 className="uml-brand-title">
           Diseña diagramas de clases con precisión
           <span className="gradient-text"> y en tiempo real.</span>
         </h1>
-        <p className="uml-brand-desc">
-          Plataforma avanzada de modelado visual UML. Construye la arquitectura orientada a objetos de tu sistema, define relaciones y sincroniza con tu equipo al instante.
-        </p>
       </div>
 
       {/* Interactive UML Canvas Visualizer */}
@@ -101,28 +98,6 @@ export const UmlShowcase: React.FC = () => {
               <div className="uml-item"><span className="visibility public">+</span> exportarCodigo(lang): <span className="type">Zip</span></div>
               <div className="uml-item"><span className="visibility public">+</span> validarModelo(): <span className="type">Boolean</span></div>
             </div>
-          </div>
-        </div>
-
-        {/* Feature Pills */}
-        <div className="uml-feature-strip">
-          <div className="feature-pill">
-            <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
-            </svg>
-            <span>Generación de Código</span>
-          </div>
-          <div className="feature-pill">
-            <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
-            </svg>
-            <span>Colaboración en Vivo</span>
-          </div>
-          <div className="feature-pill">
-            <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            <span>Validación UML 2.5</span>
           </div>
         </div>
       </div>

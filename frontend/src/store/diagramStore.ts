@@ -100,7 +100,7 @@ interface DiagramState {
   resetDiagram: () => void;
   importDiagramFromAi: (
     detectedClasses: { name: string; stereotype?: string; attributes: string[]; methods: string[]; position?: { x: number; y: number } }[],
-    detectedRelations?: { source: string; target: string; type?: UmlRelationType; sourceMultiplicity?: string; targetMultiplicity?: string; label?: string }[],
+    detectedRelations?: { source: string; target: string; type?: UmlRelationType; sourceMultiplicity?: string; targetMultiplicity?: string; label?: string; associationClassName?: string }[],
     mode?: 'replace' | 'append'
   ) => void;
 }
@@ -504,6 +504,15 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
     const classIdMap: Record<string, string> = {};
     const newNodes: Node<UmlClassNodeData>[] = [];
 
+    // Si es modo append, pre-poblar classIdMap con las clases existentes
+    if (mode === 'append') {
+      state.nodes.forEach((n) => {
+        if (n.type === 'umlClass' && n.data?.name) {
+          classIdMap[n.data.name.toLowerCase().trim()] = n.id;
+        }
+      });
+    }
+
     // Si es modo append, calculamos el offset respecto a los nodos existentes
     let offsetX = 100;
     let offsetY = 100;
@@ -574,35 +583,109 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
       });
     });
 
+    const workingEdges = mode === 'append' ? [...state.edges] : [];
     const newEdges: Edge[] = [];
+
     detectedRelations.forEach((rel, index) => {
       const sourceId = classIdMap[rel.source.toLowerCase().trim()];
       const targetId = classIdMap[rel.target.toLowerCase().trim()];
 
       if (sourceId && targetId) {
-        newEdges.push({
-          id: `edge_ai_${Date.now()}_${index}`,
-          source: sourceId,
-          target: targetId,
-          type: 'umlEdge',
-          data: {
-            relationType: rel.type || 'association',
-            sourceMultiplicity: rel.sourceMultiplicity || '',
-            targetMultiplicity: rel.targetMultiplicity || '',
-            label: rel.label || '',
-          },
-        });
+        let intermediateId = rel.associationClassName
+          ? classIdMap[rel.associationClassName.toLowerCase().trim()]
+          : undefined;
+
+        // Si es una relación de muchos a muchos (associationClass) y no existe la clase intermedia, generarla automáticamente
+        if (rel.type === 'associationClass' && !intermediateId) {
+          const allNodesSoFar = mode === 'append' ? [...state.nodes, ...newNodes] : newNodes;
+          const sourceNode = allNodesSoFar.find((n) => n.id === sourceId);
+          const targetNode = allNodesSoFar.find((n) => n.id === targetId);
+          const sourceName = sourceNode?.data?.name || rel.source;
+          const targetName = targetNode?.data?.name || rel.target;
+          const intermediateName = rel.associationClassName || `${sourceName}_${targetName}`;
+
+          intermediateId = `class_assoc_${Date.now()}_${index}`;
+          classIdMap[intermediateName.toLowerCase().trim()] = intermediateId;
+
+          const midX = sourceNode && targetNode ? Math.round((sourceNode.position.x + targetNode.position.x) / 2) : 350;
+          const midY = sourceNode && targetNode ? Math.round(Math.max(sourceNode.position.y, targetNode.position.y) + 160) : 350;
+
+          newNodes.push({
+            id: intermediateId,
+            type: 'umlClass',
+            position: { x: midX, y: midY },
+            data: {
+              name: intermediateName,
+              stereotype: '',
+              attributes: [
+                { id: `attr_${Date.now()}_1`, visibility: '+', name: 'id', type: 'int' },
+                { id: `attr_${Date.now()}_2`, visibility: '+', name: `${sourceName.toLowerCase()}_id`, type: 'int' },
+                { id: `attr_${Date.now()}_3`, visibility: '+', name: `${targetName.toLowerCase()}_id`, type: 'int' },
+              ],
+              methods: [],
+            },
+          });
+        }
+
+        // Normalizar multiplicidades (por ejemplo: '1...*' -> '1..*', '*....*' -> '*..*')
+        const normSourceMult = (rel.sourceMultiplicity || '').replace(/\.{2,}/g, '..').trim();
+        const normTargetMult = (rel.targetMultiplicity || '').replace(/\.{2,}/g, '..').trim();
+
+        // Verificar si ya existe una relación previa entre estos dos nodos en append mode
+        const existingIdx = mode === 'append'
+          ? workingEdges.findIndex(
+              (e) =>
+                (e.source === sourceId && e.target === targetId) ||
+                (e.source === targetId && e.target === sourceId)
+            )
+          : -1;
+
+        if (existingIdx !== -1) {
+          const existing = workingEdges[existingIdx];
+          const isReverse = existing.source === targetId && existing.target === sourceId;
+          workingEdges[existingIdx] = {
+            ...existing,
+            data: {
+              ...existing.data,
+              relationType: rel.type || existing.data?.relationType || 'association',
+              associationClassId: intermediateId !== undefined ? intermediateId : existing.data?.associationClassId,
+              sourceMultiplicity: isReverse
+                ? normTargetMult || existing.data?.sourceMultiplicity || ''
+                : normSourceMult || existing.data?.sourceMultiplicity || '',
+              targetMultiplicity: isReverse
+                ? normSourceMult || existing.data?.targetMultiplicity || ''
+                : normTargetMult || existing.data?.targetMultiplicity || '',
+              label: rel.label !== undefined && rel.label !== '' ? rel.label : existing.data?.label || '',
+            },
+          };
+        } else {
+          newEdges.push({
+            id: `edge_ai_${Date.now()}_${index}`,
+            source: sourceId,
+            target: targetId,
+            type: 'umlEdge',
+            data: {
+              relationType: rel.type || 'association',
+              associationClassId: intermediateId,
+              sourceMultiplicity: normSourceMult,
+              targetMultiplicity: normTargetMult,
+              label: rel.label || '',
+            },
+          });
+        }
       }
     });
 
     const finalNodes = mode === 'append' ? [...state.nodes, ...newNodes] : newNodes;
-    const finalEdges = mode === 'append' ? [...state.edges, ...newEdges] : newEdges;
+    const finalEdges = mode === 'append' ? [...workingEdges, ...newEdges] : newEdges;
+    const distributedEdges = distributeEdgeHandles(finalEdges, finalNodes);
 
     set({
       nodes: finalNodes,
-      edges: finalEdges,
+      edges: distributedEdges,
       hasUnsavedChanges: true,
     });
   },
 }));
+
 

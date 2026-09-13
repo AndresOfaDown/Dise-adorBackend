@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.1/ref/settings/
 """
 
+import os
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -22,12 +23,13 @@ load_dotenv(BASE_DIR / '.env')
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-wpq6aiemfom7)-ek5v9igh3qdf2$n=xer=&lg$xi!-h4twcc6$'
+SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-wpq6aiemfom7)-ek5v9igh3qdf2$n=xer=&lg$xi!-h4twcc6$')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.environ.get('DEBUG', 'True').lower() in ('true', '1', 't')
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['*'] if DEBUG else []
+
 
 
 # Application definition
@@ -90,14 +92,14 @@ WSGI_APPLICATION = 'config.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/6.1/ref/settings/#databases
 
-DATABASES = {
+DATABASES = { 
     'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'diagramasDB',
-        'USER': 'postgres', 
-        'PASSWORD': '61333148',
-        'HOST': '127.0.0.1',  
-        'PORT': '5432',       
+        'ENGINE': os.environ.get('DB_ENGINE', 'django.db.backends.postgresql'),
+        'NAME': os.environ.get('DB_NAME', 'diagramasDB'),
+        'USER': os.environ.get('DB_USER', 'postgres'), 
+        'PASSWORD': os.environ.get('DB_PASSWORD', '61333148'),
+        'HOST': os.environ.get('DB_HOST', '127.0.0.1'),  
+        'PORT': os.environ.get('DB_PORT', '5432'),       
     }
 }
 

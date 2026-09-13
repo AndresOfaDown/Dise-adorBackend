@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useCallback, useState, useMemo } from 'react';
+
 import ReactFlow, {
   Background,
   Controls,
@@ -13,6 +14,7 @@ import toast from 'react-hot-toast';
 import { useDiagramStore } from '../../store/diagramStore';
 import { useNavigationStore } from '../../store/navigationStore';
 import { EditorHeader } from './EditorHeader';
+import { AiAssistantPanel } from './AiAssistantPanel';
 import { ToolSidebar } from './ToolSidebar';
 import { UmlClassNode } from './nodes/UmlClassNode';
 import { UmlTextNode } from './nodes/UmlTextNode';
@@ -474,6 +476,7 @@ const EditorCanvas: React.FC = () => {
 export const ClassDiagramEditor: React.FC = () => {
   const { activeProjectId } = useNavigationStore();
   const { loadProjectDiagram, isLoading, nodes } = useDiagramStore();
+  const [isAiPanelOpen, setIsAiPanelOpen] = useState(false);
 
   // Activación del auto-guardado inteligente (debounce de 1500ms)
   useAutoSave(1500);
@@ -497,12 +500,19 @@ export const ClassDiagramEditor: React.FC = () => {
 
   return (
     <div className="uml-editor-root">
-      <EditorHeader />
-      <div className="editor-body-layout">
+      <EditorHeader
+        isAiPanelOpen={isAiPanelOpen}
+        onToggleAiPanel={() => setIsAiPanelOpen(!isAiPanelOpen)}
+      />
+      <div className={`editor-body-layout ${isAiPanelOpen ? 'ai-panel-open' : ''}`}>
         <ToolSidebar />
         <ReactFlowProvider>
           <EditorCanvas />
         </ReactFlowProvider>
+        <AiAssistantPanel
+          isOpen={isAiPanelOpen}
+          onClose={() => setIsAiPanelOpen(false)}
+        />
       </div>
     </div>
   );

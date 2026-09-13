@@ -27,15 +27,7 @@ export const AuthPage: React.FC = () => {
             <span className="brand-version">v1.0</span>
           </div>
         </div>
-
-        <div className="nav-actions">
-          <span className="nav-status-indicator">
-            <span className="status-dot"></span>
-            Backend API Online
-          </span>
-        </div>
       </header>
-
       {/* Main Split Layout */}
       <main className="auth-main-container">
         {/* Left Side: UML Presentation Showcase */}

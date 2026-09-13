@@ -4,13 +4,20 @@ import { saveAs } from 'file-saver';
 import toast from 'react-hot-toast';
 import { useDiagramStore, type ToolType } from '../../store/diagramStore';
 import { ImageScanModal } from './modals/ImageScanModal';
+import { UmlExportModal } from './modals/UmlExportModal';
+import { UmlImportModal } from './modals/UmlImportModal';
+import { SpringBootExportModal } from './modals/SpringBootExportModal';
 
 export const ToolSidebar: React.FC = () => {
   const { selectedTool, setSelectedTool, addClassNode, addTextNode, projectName } = useDiagramStore();
 
   const [isActionsOpen, setIsActionsOpen] = useState(true);
   const [isScanModalOpen, setIsScanModalOpen] = useState(false);
+  const [isUmlExportOpen, setIsUmlExportOpen] = useState(false);
+  const [isUmlImportOpen, setIsUmlImportOpen] = useState(false);
+  const [isSpringBootExportOpen, setIsSpringBootExportOpen] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+
 
   const handleCreateClassQuick = () => {
     const randomOffset = Math.floor(Math.random() * 80);
@@ -233,7 +240,27 @@ export const ToolSidebar: React.FC = () => {
               </span>
             </button>
 
-            {/* 3. Exportar como SQL */}
+            {/* 3. Exportar a Editor UML (Enterprise Architect / PlantUML) - CU06 */}
+            <button
+              type="button"
+              className="sidebar-action-item"
+              onClick={() => setIsUmlExportOpen(true)}
+              title="Exportar diagrama en formato estándar XMI 2.1 para Enterprise Architect o PlantUML"
+            >
+              <span className="action-item-title">Exportar a Editor UML (XMI / PlantUML)</span>
+            </button>
+
+            {/* 4. Importar desde Editor UML (Enterprise Architect / PlantUML) - CU06 */}
+            <button
+              type="button"
+              className="sidebar-action-item"
+              onClick={() => setIsUmlImportOpen(true)}
+              title="Importar clases y relaciones desde archivos XMI de Enterprise Architect o PlantUML"
+            >
+              <span className="action-item-title">Importar desde Editor UML (XMI / PlantUML)</span>
+            </button>
+
+            {/* 5. Exportar como SQL */}
             <button
               type="button"
               className="sidebar-action-item"
@@ -245,16 +272,17 @@ export const ToolSidebar: React.FC = () => {
               <span className="action-item-title">Exportar como SQL</span>
             </button>
 
-            {/* 4. Exportar a Backend */}
+            {/* 6. Exportar a Backend Spring Boot (CU04) */}
             <button
               type="button"
               className="sidebar-action-item"
-              onClick={() => {
-                toast('Generación de código Backend disponible próximamente');
-              }}
-              title="Generar código de backend"
+              onClick={() => setIsSpringBootExportOpen(true)}
+              title="Generar proyecto completo Spring Boot con 4 capas y PostgreSQL en archivo ZIP"
             >
-              <span className="action-item-title">Exportar a Backend</span>
+              <span className="action-item-title" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+                <span>Exportar a Backend Spring Boot</span>
+                <span style={{ fontSize: '10px', backgroundColor: '#10b981', color: '#ffffff', padding: '1px 6px', borderRadius: '4px', fontWeight: 'bold' }}>ZIP</span>
+              </span>
             </button>
           </div>
         )}
@@ -263,7 +291,7 @@ export const ToolSidebar: React.FC = () => {
       {/* Guía rápida al pie del sidebar */}
       <div className="sidebar-footer-hint">
         <p className="hint-text">
-          💡 <strong>Tip:</strong> Selecciona una relación y haz clic en dos clases para vincularlas.
+          <strong>Tip:</strong> Selecciona una relación y haz clic en dos clases para vincularlas.
         </p>
       </div>
 
@@ -272,6 +300,25 @@ export const ToolSidebar: React.FC = () => {
         isOpen={isScanModalOpen}
         onClose={() => setIsScanModalOpen(false)}
       />
+
+      {/* Modal CU06: Exportar a Editor UML */}
+      <UmlExportModal
+        isOpen={isUmlExportOpen}
+        onClose={() => setIsUmlExportOpen(false)}
+      />
+
+      {/* Modal CU06: Importar desde Editor UML */}
+      <UmlImportModal
+        isOpen={isUmlImportOpen}
+        onClose={() => setIsUmlImportOpen(false)}
+      />
+
+      {/* Modal CU04: Generar Backend Spring Boot (ZIP) */}
+      <SpringBootExportModal
+        isOpen={isSpringBootExportOpen}
+        onClose={() => setIsSpringBootExportOpen(false)}
+      />
     </aside>
+
   );
 };

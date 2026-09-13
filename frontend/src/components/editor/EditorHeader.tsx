@@ -3,7 +3,12 @@ import toast from 'react-hot-toast';
 import { useDiagramStore } from '../../store/diagramStore';
 import { useNavigationStore } from '../../store/navigationStore';
 
-export const EditorHeader: React.FC = () => {
+interface EditorHeaderProps {
+  isAiPanelOpen?: boolean;
+  onToggleAiPanel?: () => void;
+}
+
+export const EditorHeader: React.FC<EditorHeaderProps> = ({ isAiPanelOpen, onToggleAiPanel }) => {
   const {
     projectName,
     setProjectName,
@@ -157,6 +162,22 @@ export const EditorHeader: React.FC = () => {
 
         <div className="editor-brand-divider"></div>
 
+        {/* Botón Asistente IA - CU05 */}
+        <button
+          type="button"
+          className={`editor-ai-btn ${isAiPanelOpen ? 'active' : ''}`}
+          onClick={onToggleAiPanel}
+          title="Abrir asistente de modelado IA (voz y texto)"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M12 2a7 7 0 017 7c0 2.38-1.19 4.47-3 5.74V17a2 2 0 01-2 2H10a2 2 0 01-2-2v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 017-7z" />
+            <line x1="10" y1="22" x2="14" y2="22" />
+          </svg>
+          <span>Asistente IA</span>
+        </button>
+
+        <div className="editor-brand-divider"></div>
+
         {/* Botón Guardar Diagrama (Manual) */}
         <button
           type="button"
@@ -183,3 +204,5 @@ export const EditorHeader: React.FC = () => {
     </header>
   );
 };
+
+

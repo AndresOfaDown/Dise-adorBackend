@@ -1,4 +1,13 @@
+# Variables de entorno
 .env
 Backend/.env
-.env
-Backend/.env
+*.env
+!.env.example
+!Backend/.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
