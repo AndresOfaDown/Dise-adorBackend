@@ -396,13 +396,87 @@ export const generateRepositoryCode = (
 };
 
 // -------------------------------------------------------------
-// 3. GENERADOR DE LA CAPA SERVICIO (Interface e Implementación)
+// 2.5. GENERADOR DE LA CAPA DTO (Data Transfer Object - Capa 5)
+// -------------------------------------------------------------
+export const generateDtoCode = (
+  node: Node<UmlClassNodeData>,
+  packageName: string
+): string => {
+  const className = toPascalCase(node.data?.name || 'Entity');
+  const dtoName = `${className}DTO`;
+  const rawAttributes = node.data?.attributes || [];
+
+  const hasCustomId = rawAttributes.some((a) => sanitizeFieldName(a.name) === 'id');
+  const idType = hasCustomId
+    ? mapUmlToJavaType(rawAttributes.find((a) => sanitizeFieldName(a.name) === 'id')?.type || 'long')
+    : 'Long';
+
+  const fields = rawAttributes
+    .filter((attr) => sanitizeFieldName(attr.name) !== 'id')
+    .map((attr) => ({
+      name: sanitizeFieldName(attr.name),
+      type: mapUmlToJavaType(attr.type),
+      originalName: attr.name,
+    }));
+
+  const needsLocalDate = fields.some((f) => f.type === 'LocalDate');
+  const needsLocalDateTime = fields.some((f) => f.type === 'LocalDateTime');
+
+  let code = `package ${packageName}.dto;\n\n`;
+  if (needsLocalDate) code += `import java.time.LocalDate;\n`;
+  if (needsLocalDateTime) code += `import java.time.LocalDateTime;\n`;
+
+  code += `\n/**\n * Capa DTO (Data Transfer Object) para la entidad ${className}.\n`;
+  code += ` * Desacopla la capa de presentación (REST / JSON) de la capa de persistencia (Entidad JPA).\n */\n`;
+  code += `public class ${dtoName} {\n\n`;
+
+  // ID
+  code += `    private ${idType} id;\n`;
+
+  // Atributos
+  fields.forEach((f) => {
+    code += `    private ${f.type} ${f.name};\n`;
+  });
+  code += `\n`;
+
+  // Constructor vacío
+  code += `    // ===== Constructor vacío =====\n`;
+  code += `    public ${dtoName}() {\n    }\n\n`;
+
+  // Constructor con argumentos
+  const constructorParams = [`${idType} id`, ...fields.map((f) => `${f.type} ${f.name}`)].join(', ');
+  code += `    // ===== Constructor con argumentos =====\n`;
+  code += `    public ${dtoName}(${constructorParams}) {\n`;
+  code += `        this.id = id;\n`;
+  fields.forEach((f) => {
+    code += `        this.${f.name} = ${f.name};\n`;
+  });
+  code += `    }\n\n`;
+
+  // Getters y Setters
+  code += `    // ===== Getters y Setters =====\n`;
+  code += `    public ${idType} getId() {\n        return id;\n    }\n\n`;
+  code += `    public void setId(${idType} id) {\n        this.id = id;\n    }\n\n`;
+
+  fields.forEach((f) => {
+    const capitalized = f.name.charAt(0).toUpperCase() + f.name.slice(1);
+    code += `    public ${f.type} get${capitalized}() {\n        return ${f.name};\n    }\n\n`;
+    code += `    public void set${capitalized}(${f.type} ${f.name}) {\n        this.${f.name} = ${f.name};\n    }\n\n`;
+  });
+
+  code += `}\n`;
+  return code;
+};
+
+// -------------------------------------------------------------
+// 3. GENERADOR DE LA CAPA SERVICIO (Interface e Implementación con DTOs)
 // -------------------------------------------------------------
 export const generateServiceInterfaceCode = (
   node: Node<UmlClassNodeData>,
   packageName: string
 ): string => {
   const className = toPascalCase(node.data?.name || 'Entity');
+  const dtoName = `${className}DTO`;
   const rawAttributes = node.data?.attributes || [];
   const hasCustomId = rawAttributes.some((a) => sanitizeFieldName(a.name) === 'id');
   const idType = hasCustomId
@@ -410,15 +484,15 @@ export const generateServiceInterfaceCode = (
     : 'Long';
 
   let code = `package ${packageName}.service;\n\n`;
-  code += `import ${packageName}.model.${className};\n`;
+  code += `import ${packageName}.dto.${dtoName};\n`;
   code += `import java.util.List;\n`;
   code += `import java.util.Optional;\n\n`;
-  code += `/**\n * Interfaz de la capa de servicio para la entidad ${className}.\n */\n`;
+  code += `/**\n * Interfaz de la capa de servicio para la entidad ${className}.\n * Opera exclusivamente con objetos de transferencia de datos (${dtoName}).\n */\n`;
   code += `public interface ${className}Service {\n\n`;
-  code += `    List<${className}> findAll();\n\n`;
-  code += `    Optional<${className}> findById(${idType} id);\n\n`;
-  code += `    ${className} save(${className} entity);\n\n`;
-  code += `    ${className} update(${idType} id, ${className} entity);\n\n`;
+  code += `    List<${dtoName}> findAll();\n\n`;
+  code += `    Optional<${dtoName}> findById(${idType} id);\n\n`;
+  code += `    ${dtoName} save(${dtoName} dto);\n\n`;
+  code += `    ${dtoName} update(${idType} id, ${dtoName} dto);\n\n`;
   code += `    void deleteById(${idType} id);\n`;
   code += `}\n`;
 
@@ -430,6 +504,7 @@ export const generateServiceImplCode = (
   packageName: string
 ): string => {
   const className = toPascalCase(node.data?.name || 'Entity');
+  const dtoName = `${className}DTO`;
   const varName = toCamelCase(className);
   const repoName = `${varName}Repository`;
   const rawAttributes = node.data?.attributes || [];
@@ -438,15 +513,25 @@ export const generateServiceImplCode = (
     ? mapUmlToJavaType(rawAttributes.find((a) => sanitizeFieldName(a.name) === 'id')?.type || 'long')
     : 'Long';
 
+  const fields = rawAttributes
+    .filter((attr) => sanitizeFieldName(attr.name) !== 'id')
+    .map((attr) => ({
+      name: sanitizeFieldName(attr.name),
+      type: mapUmlToJavaType(attr.type),
+      capitalized: sanitizeFieldName(attr.name).charAt(0).toUpperCase() + sanitizeFieldName(attr.name).slice(1),
+    }));
+
   let code = `package ${packageName}.service.impl;\n\n`;
+  code += `import ${packageName}.dto.${dtoName};\n`;
   code += `import ${packageName}.model.${className};\n`;
   code += `import ${packageName}.repository.${className}Repository;\n`;
   code += `import ${packageName}.service.${className}Service;\n`;
   code += `import org.springframework.stereotype.Service;\n`;
   code += `import org.springframework.transaction.annotation.Transactional;\n`;
   code += `import java.util.List;\n`;
-  code += `import java.util.Optional;\n\n`;
-  code += `/**\n * Implementación de la capa de servicio para la entidad ${className}.\n */\n`;
+  code += `import java.util.Optional;\n`;
+  code += `import java.util.stream.Collectors;\n\n`;
+  code += `/**\n * Implementación de la capa de servicio para la entidad ${className}.\n * Realiza el mapeo y conversión bidireccional entre la entidad JPA (${className}) y su DTO (${dtoName}).\n */\n`;
   code += `@Service\n`;
   code += `@Transactional\n`;
   code += `public class ${className}ServiceImpl implements ${className}Service {\n\n`;
@@ -455,49 +540,85 @@ export const generateServiceImplCode = (
   code += `        this.${repoName} = ${repoName};\n`;
   code += `    }\n\n`;
 
+  // findAll
   code += `    @Override\n`;
   code += `    @Transactional(readOnly = true)\n`;
-  code += `    public List<${className}> findAll() {\n`;
-  code += `        return ${repoName}.findAll();\n`;
+  code += `    public List<${dtoName}> findAll() {\n`;
+  code += `        return ${repoName}.findAll()\n`;
+  code += `                .stream()\n`;
+  code += `                .map(this::toDTO)\n`;
+  code += `                .collect(Collectors.toList());\n`;
   code += `    }\n\n`;
 
+  // findById
   code += `    @Override\n`;
   code += `    @Transactional(readOnly = true)\n`;
-  code += `    public Optional<${className}> findById(${idType} id) {\n`;
-  code += `        return ${repoName}.findById(id);\n`;
+  code += `    public Optional<${dtoName}> findById(${idType} id) {\n`;
+  code += `        return ${repoName}.findById(id).map(this::toDTO);\n`;
   code += `    }\n\n`;
 
+  // save
   code += `    @Override\n`;
-  code += `    public ${className} save(${className} entity) {\n`;
-  code += `        return ${repoName}.save(entity);\n`;
+  code += `    public ${dtoName} save(${dtoName} dto) {\n`;
+  code += `        ${className} entity = toEntity(dto);\n`;
+  code += `        ${className} saved = ${repoName}.save(entity);\n`;
+  code += `        return toDTO(saved);\n`;
   code += `    }\n\n`;
 
+  // update
   code += `    @Override\n`;
-  code += `    public ${className} update(${idType} id, ${className} entity) {\n`;
+  code += `    public ${dtoName} update(${idType} id, ${dtoName} dto) {\n`;
   code += `        return ${repoName}.findById(id).map(existing -> {\n`;
-  code += `            entity.setId(id);\n`;
-  code += `            return ${repoName}.save(entity);\n`;
+  fields.forEach((f) => {
+    code += `            existing.set${f.capitalized}(dto.get${f.capitalized}());\n`;
+  });
+  code += `            ${className} updated = ${repoName}.save(existing);\n`;
+  code += `            return toDTO(updated);\n`;
   code += `        }).orElseThrow(() -> new RuntimeException("${className} no encontrado con ID: " + id));\n`;
   code += `    }\n\n`;
 
+  // deleteById
   code += `    @Override\n`;
   code += `    public void deleteById(${idType} id) {\n`;
   code += `        ${repoName}.deleteById(id);\n`;
-  code += `    }\n`;
-  code += `}\n`;
+  code += `    }\n\n`;
 
+  // toDTO mapper
+  code += `    // ===== Métodos de Mapeo Entity <-> DTO =====\n`;
+  code += `    private ${dtoName} toDTO(${className} entity) {\n`;
+  code += `        if (entity == null) return null;\n`;
+  const toDtoParams = ['entity.getId()', ...fields.map((f) => `entity.get${f.capitalized}()`)].join(', ');
+  code += `        return new ${dtoName}(${toDtoParams});\n`;
+  code += `    }\n\n`;
+
+  // toEntity mapper
+  code += `    private ${className} toEntity(${dtoName} dto) {\n`;
+  code += `        if (dto == null) return null;\n`;
+  code += `        ${className} entity = new ${className}();\n`;
+  code += `        if (dto.getId() != null) {\n`;
+  code += `            entity.setId(dto.getId());\n`;
+  code += `        }\n`;
+  fields.forEach((f) => {
+    code += `        entity.set${f.capitalized}(dto.get${f.capitalized}());\n`;
+  });
+  code += `        return entity;\n`;
+  code += `    }\n`;
+
+  code += `}\n`;
   return code;
 };
 
 // -------------------------------------------------------------
-// 4. GENERADOR DE LA CAPA CONTROLADOR (Controller)
+// 4. GENERADOR DE LA CAPA CONTROLADOR (Controller con DTOs)
 // -------------------------------------------------------------
 export const generateControllerCode = (
   node: Node<UmlClassNodeData>,
   packageName: string
 ): string => {
   const className = toPascalCase(node.data?.name || 'Entity');
+  const dtoName = `${className}DTO`;
   const varName = toCamelCase(className);
+  const dtoVarName = `${varName}DTO`;
   const serviceName = `${varName}Service`;
   const endpointPath = toPluralEndpoint(className);
   const rawAttributes = node.data?.attributes || [];
@@ -507,13 +628,14 @@ export const generateControllerCode = (
     : 'Long';
 
   let code = `package ${packageName}.controller;\n\n`;
-  code += `import ${packageName}.model.${className};\n`;
+  code += `import ${packageName}.dto.${dtoName};\n`;
   code += `import ${packageName}.service.${className}Service;\n`;
   code += `import org.springframework.http.HttpStatus;\n`;
   code += `import org.springframework.http.ResponseEntity;\n`;
   code += `import org.springframework.web.bind.annotation.*;\n`;
   code += `import java.util.List;\n\n`;
-  code += `/**\n * Controlador REST para la entidad ${className}.\n * Expone endpoints CRUD en /api/v1/${endpointPath}\n */\n`;
+  code += `/**\n * Controlador REST para la entidad ${className}.\n`;
+  code += ` * Expone endpoints CRUD en /api/v1/${endpointPath} utilizando exclusivamente la capa DTO (${dtoName}).\n */\n`;
   code += `@RestController\n`;
   code += `@RequestMapping("/api/v1/${endpointPath}")\n`;
   code += `@CrossOrigin(origins = "*")\n`;
@@ -525,13 +647,13 @@ export const generateControllerCode = (
 
   // GET ALL
   code += `    @GetMapping\n`;
-  code += `    public ResponseEntity<List<${className}>> getAll() {\n`;
+  code += `    public ResponseEntity<List<${dtoName}>> getAll() {\n`;
   code += `        return ResponseEntity.ok(${serviceName}.findAll());\n`;
   code += `    }\n\n`;
 
   // GET BY ID
   code += `    @GetMapping("/{id}")\n`;
-  code += `    public ResponseEntity<${className}> getById(@PathVariable ${idType} id) {\n`;
+  code += `    public ResponseEntity<${dtoName}> getById(@PathVariable ${idType} id) {\n`;
   code += `        return ${serviceName}.findById(id)\n`;
   code += `                .map(ResponseEntity::ok)\n`;
   code += `                .orElse(ResponseEntity.notFound().build());\n`;
@@ -539,16 +661,16 @@ export const generateControllerCode = (
 
   // CREATE
   code += `    @PostMapping\n`;
-  code += `    public ResponseEntity<${className}> create(@RequestBody ${className} ${varName}) {\n`;
-  code += `        ${className} created = ${serviceName}.save(${varName});\n`;
+  code += `    public ResponseEntity<${dtoName}> create(@RequestBody ${dtoName} ${dtoVarName}) {\n`;
+  code += `        ${dtoName} created = ${serviceName}.save(${dtoVarName});\n`;
   code += `        return ResponseEntity.status(HttpStatus.CREATED).body(created);\n`;
   code += `    }\n\n`;
 
   // UPDATE
   code += `    @PutMapping("/{id}")\n`;
-  code += `    public ResponseEntity<${className}> update(@PathVariable ${idType} id, @RequestBody ${className} ${varName}) {\n`;
+  code += `    public ResponseEntity<${dtoName}> update(@PathVariable ${idType} id, @RequestBody ${dtoName} ${dtoVarName}) {\n`;
   code += `        try {\n`;
-  code += `            ${className} updated = ${serviceName}.update(id, ${varName});\n`;
+  code += `            ${dtoName} updated = ${serviceName}.update(id, ${dtoVarName});\n`;
   code += `            return ResponseEntity.ok(updated);\n`;
   code += `        } catch (RuntimeException e) {\n`;
   code += `            return ResponseEntity.notFound().build();\n`;
@@ -891,17 +1013,18 @@ export const generateReadme = (
 ): string => {
   return `# Proyecto Backend Spring Boot: ${config.projectName}
 
-Proyecto backend completo autogenerado a partir de un diagrama UML con arquitectura canónica de 4 capas y persistencia en **PostgreSQL**.
+Proyecto backend completo autogenerado a partir de un diagrama UML con arquitectura canónica empresarial de 5 capas y persistencia en **PostgreSQL**.
 Construido con **Java estándar** (sin dependencias problemáticas de Lombok), 100% compatible con **Java 17, 21, 22, 23 y superiores**.
 
 ---
 
-## 🏛️ Arquitectura en 4 Capas
+## 🏛️ Arquitectura en 5 Capas (Enterprise Spring Boot)
 
-1. **Modelo / Entidad (\`model/\`)**: Clases JPA (\`@Entity\`, \`@Table\`, \`@Id\`, etc.) con constructores y getters/setters estándar en Java puro.
-2. **Repositorio (\`repository/\`)**: Interfaces \`JpaRepository\` de Spring Data JPA con operaciones CRUD automáticas sin escribir SQL.
-3. **Servicio (\`service/\`)**: Interfaces e implementaciones con lógica de negocio y transacciones (\`@Transactional\`).
-4. **Controlador (\`controller/\`)**: Controladores REST (\`@RestController\`) con soporte CORS y endpoints HTTP.
+1. **Controlador (\`controller/\`)**: Controladores REST (\`@RestController\`) con soporte CORS y endpoints HTTP que operan exclusivamente con la capa DTO.
+2. **DTO (\`dto/\`)**: Objetos de transferencia de datos (*Data Transfer Objects*) que desacoplan la capa pública REST de la persistencia interna y previenen recursión infinita en JSON.
+3. **Servicio (\`service/\`)**: Interfaces e implementaciones con lógica de negocio, transacciones (\`@Transactional\`) y conversión bidireccional Entity ↔ DTO.
+4. **Repositorio (\`repository/\`)**: Interfaces \`JpaRepository\` de Spring Data JPA con operaciones CRUD automáticas sin escribir SQL.
+5. **Modelo / Entidad (\`model/\`)**: Clases JPA (\`@Entity\`, \`@Table\`, \`@Id\`, etc.) con constructores y getters/setters estándar en Java puro.
 
 ---
 
@@ -1088,6 +1211,13 @@ export const generateAllSpringBootFiles = (
     files.push({
       path: `src/main/java/${packagePath}/controller/${className}Controller.java`,
       content: generateControllerCode(node, config.packageName),
+      language: 'java',
+    });
+
+    // 5. Capa DTO (Data Transfer Object)
+    files.push({
+      path: `src/main/java/${packagePath}/dto/${className}DTO.java`,
+      content: generateDtoCode(node, config.packageName),
       language: 'java',
     });
   });

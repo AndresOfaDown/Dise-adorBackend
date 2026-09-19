@@ -143,6 +143,11 @@ export const SpringBootExportModal: React.FC<SpringBootExportModalProps> = ({
               <div style={{ fontSize: '13px', fontWeight: '600', color: '#7c2d12' }}>{classCount} REST Controllers</div>
               <div style={{ fontSize: '11px', color: '#64748b' }}>Endpoints GET, POST, PUT, DELETE</div>
             </div>
+            <div style={{ backgroundColor: '#fdf2f8', border: '1px solid #fbcfe8', borderRadius: '8px', padding: '10px 12px' }}>
+              <div style={{ fontSize: '11px', color: '#9d174d', fontWeight: 'bold' }}>5. CAPA DTO</div>
+              <div style={{ fontSize: '13px', fontWeight: '600', color: '#831843' }}>{classCount} DTOs</div>
+              <div style={{ fontSize: '11px', color: '#64748b' }}>Data Transfer Objects</div>
+            </div>
           </div>
 
           {/* Botón para desplegar configuración avanzada */}
@@ -330,6 +335,15 @@ export const SpringBootExportModal: React.FC<SpringBootExportModalProps> = ({
                   .map((f) => (
                     <option key={f.path} value={f.path}>
                       {f.path.split('/').pop()} (@RestController)
+                    </option>
+                  ))}
+              </optgroup>
+              <optgroup label="Capa 5: DTOs (Data Transfer Objects)">
+                {generatedFiles
+                  .filter((f) => f.path.includes('/dto/'))
+                  .map((f) => (
+                    <option key={f.path} value={f.path}>
+                      {f.path.split('/').pop()} (DTO)
                     </option>
                   ))}
               </optgroup>
