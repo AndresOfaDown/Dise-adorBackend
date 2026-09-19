@@ -16,6 +16,9 @@ export const EditorHeader: React.FC<EditorHeaderProps> = ({ isAiPanelOpen, onTog
     isSaving,
     collaborators,
     isSocketConnected,
+    nodes,
+    edges,
+    clearDiagram,
   } = useDiagramStore();
   const { activeProjectId, navigateToDashboard, navigateToProjects } = useNavigationStore();
 
@@ -51,6 +54,20 @@ export const EditorHeader: React.FC<EditorHeaderProps> = ({ isAiPanelOpen, onTog
       toast.success(`¡Proyecto "${projectName}" guardado exitosamente!`);
     } catch (error) {
       toast.error('Error al guardar el diagrama');
+    }
+  };
+
+  const handleClearDiagram = () => {
+    if (nodes.length === 0 && edges.length === 0) {
+      toast('El lienzo ya está vacío');
+      return;
+    }
+    const confirmed = window.confirm(
+      '¿Estás seguro de que deseas limpiar todo el diagrama?\n\nSe eliminarán todas las clases y relaciones actualmente en el lienzo.'
+    );
+    if (confirmed) {
+      clearDiagram();
+      toast.success('Diagrama limpiado exitosamente');
     }
   };
 
@@ -177,6 +194,20 @@ export const EditorHeader: React.FC<EditorHeaderProps> = ({ isAiPanelOpen, onTog
         </button>
 
         <div className="editor-brand-divider"></div>
+
+        {/* Botón Limpiar Diagrama */}
+        <button
+          type="button"
+          className="editor-clear-btn"
+          onClick={handleClearDiagram}
+          disabled={nodes.length === 0 && edges.length === 0}
+          title="Limpiar todas las clases y relaciones del diagrama"
+        >
+          <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+          </svg>
+          <span>Limpiar</span>
+        </button>
 
         {/* Botón Guardar Diagrama (Manual) */}
         <button

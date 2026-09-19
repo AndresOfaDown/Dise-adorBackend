@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Handle, Position, type NodeProps } from 'reactflow';
 import { useDiagramStore, type UmlClassNodeData, type UmlAttribute, type UmlMethod } from '../../../store/diagramStore';
+import toast from 'react-hot-toast';
 
 export const UmlClassNode: React.FC<NodeProps<UmlClassNodeData>> = ({ id, data, selected }) => {
   const {
@@ -25,6 +26,30 @@ export const UmlClassNode: React.FC<NodeProps<UmlClassNodeData>> = ({ id, data, 
   // Estado de edición inline para atributos y métodos
   const [editingAttrId, setEditingAttrId] = useState<string | null>(null);
   const [editingMethodId, setEditingMethodId] = useState<string | null>(null);
+
+  // Estado de menú contextual (clic derecho) para atributos y métodos
+  const [attrContextMenu, setAttrContextMenu] = useState<{
+    x: number;
+    y: number;
+    attrId: string;
+    attrName: string;
+  } | null>(null);
+
+  const [methodContextMenu, setMethodContextMenu] = useState<{
+    x: number;
+    y: number;
+    methodId: string;
+    methodName: string;
+  } | null>(null);
+
+  useEffect(() => {
+    const handleClickOutside = () => {
+      setAttrContextMenu(null);
+      setMethodContextMenu(null);
+    };
+    window.addEventListener('click', handleClickOutside);
+    return () => window.removeEventListener('click', handleClickOutside);
+  }, []);
 
   // Nombre de clase
   const handleNameBlur = () => {
@@ -75,13 +100,33 @@ export const UmlClassNode: React.FC<NodeProps<UmlClassNodeData>> = ({ id, data, 
 
   // Helper para parsear atributo al terminar de escribir
   const parseAttributeText = (attrId: string, text: string) => {
-    const parts = text.split(':').map((s) => s.trim());
+    let cleanText = (text || '').trim();
+    // Si el usuario vació el texto, eliminar el atributo directamente
+    if (!cleanText) {
+      handleDeleteAttribute(attrId);
+      return;
+    }
+
+    let vis: '+' | '-' | '#' | '~' | undefined;
+    const visMatch = cleanText.match(/^[+\-~#]/);
+    if (visMatch) {
+      vis = visMatch[0] as any;
+      cleanText = cleanText.replace(/^[+\-~#]+\s*/, '');
+    }
+    const parts = cleanText.split(':').map((s) => s.trim());
     const attrName = parts[0] || 'campo';
     const attrType = parts[1] || 'string';
 
     updateNodeData(id, {
       attributes: (data.attributes || []).map((a) =>
-        a.id === attrId ? { ...a, name: attrName, type: attrType } : a
+        a.id === attrId
+          ? {
+              ...a,
+              visibility: vis || a.visibility || '+',
+              name: attrName,
+              type: attrType,
+            }
+          : a
       ),
     });
   };
@@ -98,7 +143,11 @@ export const UmlClassNode: React.FC<NodeProps<UmlClassNodeData>> = ({ id, data, 
 
   // Helper para parsear método
   const parseMethodText = (methodId: string, text: string) => {
-    const cleanText = text.replace(/;$/, '').trim();
+    const cleanText = (text || '').replace(/;$/, '').trim();
+    if (!cleanText) {
+      handleDeleteMethod(methodId);
+      return;
+    }
     updateNodeData(id, {
       methods: (data.methods || []).map((m) =>
         m.id === methodId ? { ...m, name: cleanText } : m
@@ -124,6 +173,7 @@ export const UmlClassNode: React.FC<NodeProps<UmlClassNodeData>> = ({ id, data, 
     updateNodeData(id, {
       attributes: (data.attributes || []).filter((a) => a.id !== attrId),
     });
+    toast.success('Atributo eliminado');
   };
 
   // Agregar método
@@ -145,6 +195,7 @@ export const UmlClassNode: React.FC<NodeProps<UmlClassNodeData>> = ({ id, data, 
     updateNodeData(id, {
       methods: (data.methods || []).filter((m) => m.id !== methodId),
     });
+    toast.success('Método eliminado');
   };
 
   return (
@@ -243,7 +294,21 @@ export const UmlClassNode: React.FC<NodeProps<UmlClassNodeData>> = ({ id, data, 
             </div>
           ) : (
             (data.attributes || []).map((attr) => (
-              <div key={attr.id} className="simple-line-row">
+              <div
+                key={attr.id}
+                className="simple-line-row"
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setMethodContextMenu(null);
+                  setAttrContextMenu({
+                    x: e.clientX,
+                    y: e.clientY,
+                    attrId: attr.id,
+                    attrName: attr.name,
+                  });
+                }}
+              >
                 {editingAttrId === attr.id ? (
                   <input
                     type="text"
@@ -259,6 +324,8 @@ export const UmlClassNode: React.FC<NodeProps<UmlClassNodeData>> = ({ id, data, 
                         parseAttributeText(attr.id, e.currentTarget.value);
                         setEditingAttrId(null);
                         handleAddAttribute();
+                      } else if (e.key === 'Escape') {
+                        setEditingAttrId(null);
                       }
                     }}
                   />
@@ -271,7 +338,7 @@ export const UmlClassNode: React.FC<NodeProps<UmlClassNodeData>> = ({ id, data, 
                         setEditingAttrId(attr.id);
                       }
                     }}
-                    title="Clic para editar"
+                    title="Clic para editar (o clic derecho para eliminar)"
                   >
                     {formatAttributeText(attr)}
                   </div>
@@ -283,9 +350,12 @@ export const UmlClassNode: React.FC<NodeProps<UmlClassNodeData>> = ({ id, data, 
                     e.stopPropagation();
                     handleDeleteAttribute(attr.id);
                   }}
-                  title="Eliminar"
+                  title="Eliminar atributo"
+                  aria-label="Eliminar atributo"
                 >
-                  ×
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
                 </button>
               </div>
             ))
@@ -320,7 +390,21 @@ export const UmlClassNode: React.FC<NodeProps<UmlClassNodeData>> = ({ id, data, 
             </div>
           ) : (
             (data.methods || []).map((method) => (
-              <div key={method.id} className="simple-line-row">
+              <div
+                key={method.id}
+                className="simple-line-row"
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setAttrContextMenu(null);
+                  setMethodContextMenu({
+                    x: e.clientX,
+                    y: e.clientY,
+                    methodId: method.id,
+                    methodName: method.name,
+                  });
+                }}
+              >
                 {editingMethodId === method.id ? (
                   <input
                     type="text"
@@ -336,6 +420,8 @@ export const UmlClassNode: React.FC<NodeProps<UmlClassNodeData>> = ({ id, data, 
                         parseMethodText(method.id, e.currentTarget.value);
                         setEditingMethodId(null);
                         handleAddMethod();
+                      } else if (e.key === 'Escape') {
+                        setEditingMethodId(null);
                       }
                     }}
                   />
@@ -348,7 +434,7 @@ export const UmlClassNode: React.FC<NodeProps<UmlClassNodeData>> = ({ id, data, 
                         setEditingMethodId(method.id);
                       }
                     }}
-                    title="Clic para editar"
+                    title="Clic para editar (o clic derecho para eliminar)"
                   >
                     {formatMethodText(method)}
                   </div>
@@ -360,9 +446,12 @@ export const UmlClassNode: React.FC<NodeProps<UmlClassNodeData>> = ({ id, data, 
                     e.stopPropagation();
                     handleDeleteMethod(method.id);
                   }}
-                  title="Eliminar"
+                  title="Eliminar método"
+                  aria-label="Eliminar método"
                 >
-                  ×
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
                 </button>
               </div>
             ))
@@ -380,6 +469,94 @@ export const UmlClassNode: React.FC<NodeProps<UmlClassNodeData>> = ({ id, data, 
           +
         </button>
       </div>
+
+      {/* Menú contextual flotante para atributos (clic derecho) */}
+      {attrContextMenu && (
+        <div
+          className="edge-context-menu"
+          style={{
+            position: 'fixed',
+            top: attrContextMenu.y,
+            left: attrContextMenu.x,
+            zIndex: 99999,
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="context-menu-header">
+            <span>Atributo: {attrContextMenu.attrName}</span>
+          </div>
+          <button
+            type="button"
+            className="context-menu-item"
+            onClick={() => {
+              setEditingAttrId(attrContextMenu.attrId);
+              setAttrContextMenu(null);
+            }}
+          >
+            <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+            </svg>
+            <span>Editar atributo</span>
+          </button>
+          <button
+            type="button"
+            className="context-menu-item delete"
+            onClick={() => {
+              handleDeleteAttribute(attrContextMenu.attrId);
+              setAttrContextMenu(null);
+            }}
+          >
+            <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+            </svg>
+            <span>Eliminar atributo</span>
+          </button>
+        </div>
+      )}
+
+      {/* Menú contextual flotante para métodos (clic derecho) */}
+      {methodContextMenu && (
+        <div
+          className="edge-context-menu"
+          style={{
+            position: 'fixed',
+            top: methodContextMenu.y,
+            left: methodContextMenu.x,
+            zIndex: 99999,
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="context-menu-header">
+            <span>Método: {methodContextMenu.methodName}</span>
+          </div>
+          <button
+            type="button"
+            className="context-menu-item"
+            onClick={() => {
+              setEditingMethodId(methodContextMenu.methodId);
+              setMethodContextMenu(null);
+            }}
+          >
+            <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+            </svg>
+            <span>Editar método</span>
+          </button>
+          <button
+            type="button"
+            className="context-menu-item delete"
+            onClick={() => {
+              handleDeleteMethod(methodContextMenu.methodId);
+              setMethodContextMenu(null);
+            }}
+          >
+            <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+            </svg>
+            <span>Eliminar método</span>
+          </button>
+        </div>
+      )}
     </div>
   );
 };

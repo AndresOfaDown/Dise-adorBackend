@@ -98,6 +98,7 @@ interface DiagramState {
   loadProjectDiagram: (projectId: number) => Promise<void>;
   saveCurrentDiagram: (isAutoSave?: boolean) => Promise<void>;
   resetDiagram: () => void;
+  clearDiagram: () => void;
   importDiagramFromAi: (
     detectedClasses: { name: string; stereotype?: string; attributes: string[]; methods: string[]; position?: { x: number; y: number } }[],
     detectedRelations?: { source: string; target: string; type?: UmlRelationType; sourceMultiplicity?: string; targetMultiplicity?: string; label?: string; associationClassName?: string }[],
@@ -496,6 +497,17 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
       lastSaved: null,
       isAutoSaving: false,
       hasUnsavedChanges: false,
+    });
+  },
+
+  clearDiagram: () => {
+    set({
+      nodes: [],
+      edges: [],
+      connectingSourceNodeId: null,
+      hoveredNodeId: null,
+      selectedTool: 'select',
+      hasUnsavedChanges: true,
     });
   },
 

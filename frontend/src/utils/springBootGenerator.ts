@@ -70,7 +70,13 @@ const toCamelCase = (str: string): string => {
 // Sanitizar nombre de atributo (camelCase)
 const sanitizeFieldName = (name: string): string => {
   let clean = (name || 'campo').trim();
-  clean = clean.replace(/^[+-~#]/, '').trim();
+  if (clean.includes(':')) {
+    clean = clean.split(':')[0].trim();
+  }
+  // Limpiar modificadores de visibilidad UML (+, -, ~, #) con guion escapado
+  clean = clean.replace(/^[+\-~#]+\s*/, '').trim();
+  // Limpiar modificadores textuales si los tuviera
+  clean = clean.replace(/^(public|private|protected)\s+/i, '').trim();
   clean = clean.replace(/[^a-zA-Z0-9_]/g, '');
   if (!clean) clean = 'campo';
   return toCamelCase(clean);
@@ -264,19 +270,14 @@ export const generateEntityCode = (
 
   let code = `package ${packageName}.model;\n\n`;
   code += `import jakarta.persistence.*;\n`;
-  code += `import lombok.*;\n`;
   code += `import com.fasterxml.jackson.annotation.JsonIgnoreProperties;\n`;
   if (needsLocalDate) code += `import java.time.LocalDate;\n`;
   if (needsLocalDateTime) code += `import java.time.LocalDateTime;\n`;
   if (needsList) code += `import java.util.List;\nimport java.util.ArrayList;\n`;
 
-  code += `\n/**\n * Entidad JPA generada automáticamente a partir del diagrama UML.\n */\n`;
+  code += `\n/**\n * Entidad JPA generada automáticamente a partir del diagrama UML.\n * Compatible con Java 17, 21, 22 y 23+. No requiere plugins de Lombok.\n */\n`;
   code += `@Entity\n`;
   code += `@Table(name = "${tableName}")\n`;
-  code += `@Data\n`;
-  code += `@NoArgsConstructor\n`;
-  code += `@AllArgsConstructor\n`;
-  code += `@Builder\n`;
   code += `public class ${className} {\n\n`;
 
   // ID Clave Primaria
@@ -295,7 +296,6 @@ export const generateEntityCode = (
     if (rel.type === 'oneToMany') {
       code += `    @OneToMany(mappedBy = "${rel.mappedBy}", cascade = CascadeType.ALL, orphanRemoval = true)\n`;
       code += `    @JsonIgnoreProperties("${rel.mappedBy}")\n`;
-      code += `    @Builder.Default\n`;
       code += `    private List<${rel.targetClass}> ${rel.targetFieldName} = new ArrayList<>();\n\n`;
     } else if (rel.type === 'manyToOne') {
       code += `    @ManyToOne(fetch = FetchType.LAZY)\n`;
@@ -309,7 +309,6 @@ export const generateEntityCode = (
       code += `        joinColumns = @JoinColumn(name = "${tableName}_id"),\n`;
       code += `        inverseJoinColumns = @JoinColumn(name = "${rel.targetClass.toLowerCase()}_id")\n`;
       code += `    )\n`;
-      code += `    @Builder.Default\n`;
       code += `    private List<${rel.targetClass}> ${rel.targetFieldName} = new ArrayList<>();\n\n`;
     } else if (rel.type === 'oneToOne') {
       code += `    @OneToOne(cascade = CascadeType.ALL)\n`;
@@ -318,8 +317,23 @@ export const generateEntityCode = (
     }
   });
 
-  // Getters y Setters explícitos para máxima compatibilidad con cualquier IDE (incluso sin plugin Lombok)
-  code += `    // ===== Getters y Setters explícitos =====\n`;
+  // Constructores estándar (Requeridos por JPA y utilizables en cualquier versión de Java)
+  code += `    // ===== Constructor vacío (Requerido por JPA/Hibernate) =====\n`;
+  code += `    public ${className}() {\n`;
+  code += `    }\n\n`;
+
+  // Constructor completo con parámetros
+  const constructorParams = [`${idType} id`, ...fields.map((f) => `${f.type} ${f.name}`)].join(', ');
+  code += `    // ===== Constructor con argumentos =====\n`;
+  code += `    public ${className}(${constructorParams}) {\n`;
+  code += `        this.id = id;\n`;
+  fields.forEach((f) => {
+    code += `        this.${f.name} = ${f.name};\n`;
+  });
+  code += `    }\n\n`;
+
+  // Getters y Setters explícitos
+  code += `    // ===== Getters y Setters =====\n`;
   code += `    public ${idType} getId() {\n        return id;\n    }\n\n`;
   code += `    public void setId(${idType} id) {\n        this.id = id;\n    }\n\n`;
 
@@ -339,6 +353,16 @@ export const generateEntityCode = (
       code += `    public void set${capitalized}(${rel.targetClass} ${rel.targetFieldName}) {\n        this.${rel.targetFieldName} = ${rel.targetFieldName};\n    }\n\n`;
     }
   });
+
+  // toString()
+  const toStringParts = fields.map((f) => `", ${f.name}='" + ${f.name} + '\\''`).join(' +\n                ');
+  code += `    // ===== toString =====\n`;
+  code += `    @Override\n`;
+  code += `    public String toString() {\n`;
+  code += `        return "${className}{" +\n`;
+  code += `                "id=" + id${toStringParts ? ` +\n                ${toStringParts}` : ''} +\n`;
+  code += `                '}';\n`;
+  code += `    }\n`;
 
   code += `}\n`;
   return code;
@@ -547,6 +571,88 @@ export const generateControllerCode = (
 };
 
 // -------------------------------------------------------------
+// 4.1. GENERADOR DE CONTROLADOR DE METADATA / SCHEMA (Dynamic Client API)
+// -------------------------------------------------------------
+export const generateSchemaControllerCode = (
+  classNodes: Node<UmlClassNodeData>[],
+  edges: Edge[],
+  packageName: string
+): string => {
+  let code = `package ${packageName}.controller;\n\n`;
+  code += `import org.springframework.http.ResponseEntity;\n`;
+  code += `import org.springframework.web.bind.annotation.*;\n`;
+  code += `import java.util.*;\n\n`;
+  code += `/**\n * Controlador de Metadata / Esquema para consumo dinámico desde clientes móviles (Flutter) y web.\n`;
+  code += ` * Permite descubrir en tiempo de ejecución las entidades, endpoints, campos y tipos de datos del negocio.\n */\n`;
+  code += `@RestController\n`;
+  code += `@RequestMapping({"/api/v1/schema", "/api/schema"})\n`;
+  code += `@CrossOrigin(origins = "*")\n`;
+  code += `public class SchemaController {\n\n`;
+  code += `    @GetMapping\n`;
+  code += `    public ResponseEntity<List<Map<String, Object>>> getSchema() {\n`;
+  code += `        List<Map<String, Object>> entities = new ArrayList<>();\n\n`;
+
+  classNodes.forEach((node, idx) => {
+    const className = toPascalCase(node.data?.name || 'Entity');
+    const endpointPath = toPluralEndpoint(className);
+    const rawAttributes = node.data?.attributes || [];
+    const relations = getEntityRelations(node.id, className, classNodes, edges);
+
+    const hasCustomId = rawAttributes.some((a) => sanitizeFieldName(a.name) === 'id');
+    const idType = hasCustomId
+      ? mapUmlToJavaType(rawAttributes.find((a) => sanitizeFieldName(a.name) === 'id')?.type || 'long')
+      : 'Long';
+
+    code += `        // Entidad: ${className}\n`;
+    code += `        Map<String, Object> entity${idx} = new LinkedHashMap<>();\n`;
+    code += `        entity${idx}.put("name", "${className}");\n`;
+    code += `        entity${idx}.put("label", "${className}");\n`;
+    code += `        entity${idx}.put("endpoint", "/api/v1/${endpointPath}");\n`;
+    code += `        entity${idx}.put("idType", "${idType}");\n`;
+
+    code += `        List<Map<String, Object>> fields${idx} = new ArrayList<>();\n`;
+    code += `        fields${idx}.add(createField("id", "${idType}", "ID", true));\n`;
+
+    rawAttributes
+      .filter((a) => sanitizeFieldName(a.name) !== 'id')
+      .forEach((attr) => {
+        const fieldName = sanitizeFieldName(attr.name);
+        const fieldType = mapUmlToJavaType(attr.type);
+        const label = toPascalCase(fieldName);
+        code += `        fields${idx}.add(createField("${fieldName}", "${fieldType}", "${label}", false));\n`;
+      });
+
+    code += `        entity${idx}.put("fields", fields${idx});\n`;
+
+    code += `        List<Map<String, Object>> rels${idx} = new ArrayList<>();\n`;
+    relations.forEach((rel) => {
+      code += `        Map<String, Object> rel_${rel.targetFieldName} = new LinkedHashMap<>();\n`;
+      code += `        rel_${rel.targetFieldName}.put("type", "${rel.type}");\n`;
+      code += `        rel_${rel.targetFieldName}.put("targetClass", "${rel.targetClass}");\n`;
+      code += `        rel_${rel.targetFieldName}.put("fieldName", "${rel.targetFieldName}");\n`;
+      code += `        rels${idx}.add(rel_${rel.targetFieldName});\n`;
+    });
+    code += `        entity${idx}.put("relations", rels${idx});\n`;
+    code += `        entities.add(entity${idx});\n\n`;
+  });
+
+  code += `        return ResponseEntity.ok(entities);\n`;
+  code += `    }\n\n`;
+
+  code += `    private Map<String, Object> createField(String name, String type, String label, boolean readOnly) {\n`;
+  code += `        Map<String, Object> field = new LinkedHashMap<>();\n`;
+  code += `        field.put("name", name);\n`;
+  code += `        field.put("type", type);\n`;
+  code += `        field.put("label", label);\n`;
+  code += `        field.put("readOnly", readOnly);\n`;
+  code += `        return field;\n`;
+  code += `    }\n`;
+  code += `}\n`;
+
+  return code;
+};
+
+// -------------------------------------------------------------
 // 5. GENERADOR DE CLASE PRINCIPAL, CONFIGURACIONES Y POM.XML
 // -------------------------------------------------------------
 export const generateMainAppCode = (packageName: string): string => {
@@ -638,6 +744,9 @@ export const generatePomXml = (config: SpringBootConfig): string => {
 	
 	<properties>
 		<java.version>${config.javaVersion || '17'}</java.version>
+		<maven.compiler.source>${config.javaVersion || '17'}</maven.compiler.source>
+		<maven.compiler.target>${config.javaVersion || '17'}</maven.compiler.target>
+		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 	</properties>
 	
 	<dependencies>
@@ -660,13 +769,6 @@ export const generatePomXml = (config: SpringBootConfig): string => {
 			<scope>runtime</scope>
 		</dependency>
 
-		<!-- Lombok para generación limpia de getters, setters y constructores -->
-		<dependency>
-			<groupId>org.projectlombok</groupId>
-			<artifactId>lombok</artifactId>
-			<optional>true</optional>
-		</dependency>
-
 		<!-- Testing -->
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
@@ -677,21 +779,109 @@ export const generatePomXml = (config: SpringBootConfig): string => {
 
 	<build>
 		<plugins>
+			<!-- Plugin de compilacion compatible con Java 17, 21 y 23+ -->
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-compiler-plugin</artifactId>
+				<configuration>
+					<source>${config.javaVersion || '17'}</source>
+					<target>${config.javaVersion || '17'}</target>
+				</configuration>
+			</plugin>
+
+			<!-- Plugin Spring Boot para empaquetado JAR ejecutable -->
 			<plugin>
 				<groupId>org.springframework.boot</groupId>
 				<artifactId>spring-boot-maven-plugin</artifactId>
-				<configuration>
-					<excludes>
-						<exclude>
-							<groupId>org.projectlombok</groupId>
-							<artifactId>lombok</artifactId>
-						</exclude>
-					</excludes>
-				</configuration>
 			</plugin>
 		</plugins>
 	</build>
 </project>
+`;
+};
+
+// -------------------------------------------------------------
+// SCRIPTS DE MAVEN WRAPPER (mvnw.cmd, mvnw, maven-wrapper.properties)
+// Permiten ejecutar el backend sin tener Maven preinstalado
+// -------------------------------------------------------------
+export const generateMvnwCmd = (): string => {
+  return `@REM ----------------------------------------------------------------------------
+@REM Maven Wrapper script for Windows (Generado por UMLCraft)
+@REM Descarga y ejecuta Apache Maven 3.9.8 automaticamente sin requerir instalacion
+@REM ----------------------------------------------------------------------------
+@echo off
+setlocal
+
+set "WRAPPER_VERSION=3.9.8"
+set "MAVEN_URL=https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/%WRAPPER_VERSION%/apache-maven-%WRAPPER_VERSION%-bin.zip"
+set "MAVEN_DIR=%USERPROFILE%\\.m2\\wrapper\\dists\\apache-maven-%WRAPPER_VERSION%"
+set "MAVEN_HOME=%MAVEN_DIR%\\apache-maven-%WRAPPER_VERSION%"
+set "MAVEN_ZIP=%MAVEN_DIR%\\apache-maven-%WRAPPER_VERSION%-bin.zip"
+
+if exist "%MAVEN_HOME%\\bin\\mvn.cmd" goto run
+
+echo [INFO] Maven no encontrado en el sistema.
+echo [INFO] Descargando Apache Maven %WRAPPER_VERSION% automaticamente...
+if not exist "%MAVEN_DIR%" mkdir "%MAVEN_DIR%"
+
+powershell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%MAVEN_URL%', '%MAVEN_ZIP%')"
+if %ERRORLEVEL% neq 0 (
+    echo [ERROR] No se pudo descargar Maven desde %MAVEN_URL%.
+    echo [ERROR] Verifica tu conexion a internet o instala Maven manualmente.
+    exit /b 1
+)
+
+echo [INFO] Extrayendo archivos de Maven...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -Path '%MAVEN_ZIP%' -DestinationPath '%MAVEN_DIR%' -Force"
+if %ERRORLEVEL% neq 0 (
+    echo [ERROR] No se pudo descomprimir el archivo de Maven.
+    exit /b 1
+)
+
+del /q "%MAVEN_ZIP%"
+echo [INFO] Maven %WRAPPER_VERSION% preparado exitosamente.
+
+:run
+call "%MAVEN_HOME%\\bin\\mvn.cmd" %*
+exit /b %ERRORLEVEL%
+`;
+};
+
+export const generateMvnw = (): string => {
+  return `#!/bin/sh
+# ----------------------------------------------------------------------------
+# Maven Wrapper script for Unix/Linux/macOS (Generado por UMLCraft)
+# ----------------------------------------------------------------------------
+WRAPPER_VERSION="3.9.8"
+MAVEN_URL="https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/\${WRAPPER_VERSION}/apache-maven-\${WRAPPER_VERSION}-bin.zip"
+MAVEN_DIR="$HOME/.m2/wrapper/dists/apache-maven-\${WRAPPER_VERSION}"
+MAVEN_HOME="$MAVEN_DIR/apache-maven-\${WRAPPER_VERSION}"
+MAVEN_ZIP="$MAVEN_DIR/apache-maven-\${WRAPPER_VERSION}-bin.zip"
+
+if [ ! -x "$MAVEN_HOME/bin/mvn" ]; then
+    echo "[INFO] Maven no encontrado. Descargando Maven \${WRAPPER_VERSION}..."
+    mkdir -p "$MAVEN_DIR"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL "$MAVEN_URL" -o "$MAVEN_ZIP"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q "$MAVEN_URL" -O "$MAVEN_ZIP"
+    else
+        echo "[ERROR] Se requiere curl o wget para descargar Maven."
+        exit 1
+    fi
+    unzip -q -o "$MAVEN_ZIP" -d "$MAVEN_DIR"
+    rm -f "$MAVEN_ZIP"
+    chmod +x "$MAVEN_HOME/bin/mvn"
+fi
+
+exec "$MAVEN_HOME/bin/mvn" "$@"
+`;
+};
+
+export const generateMavenWrapperProperties = (): string => {
+  return `# Maven Wrapper properties
+distributionUrl=https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/3.9.8/apache-maven-3.9.8-bin.zip
+wrapperUrl=https://repo.maven.apache.org/maven2/org/apache/maven/wrapper/maven-wrapper/3.3.2/maven-wrapper-3.3.2.jar
 `;
 };
 
@@ -702,13 +892,14 @@ export const generateReadme = (
   return `# Proyecto Backend Spring Boot: ${config.projectName}
 
 Proyecto backend completo autogenerado a partir de un diagrama UML con arquitectura canónica de 4 capas y persistencia en **PostgreSQL**.
+Construido con **Java estándar** (sin dependencias problemáticas de Lombok), 100% compatible con **Java 17, 21, 22, 23 y superiores**.
 
 ---
 
 ## 🏛️ Arquitectura en 4 Capas
 
-1. **Modelo / Entidad (\`model/\`)**: Clases con anotaciones JPA (\`@Entity\`, \`@Table\`, \`@Id\`, etc.) mapeadas a las tablas relacionales.
-2. **Repositorio (\`repository/\`)**: Interfaces \`JpaRepository\` de Spring Data JPA con operaciones CRUD automáticas.
+1. **Modelo / Entidad (\`model/\`)**: Clases JPA (\`@Entity\`, \`@Table\`, \`@Id\`, etc.) con constructores y getters/setters estándar en Java puro.
+2. **Repositorio (\`repository/\`)**: Interfaces \`JpaRepository\` de Spring Data JPA con operaciones CRUD automáticas sin escribir SQL.
 3. **Servicio (\`service/\`)**: Interfaces e implementaciones con lógica de negocio y transacciones (\`@Transactional\`).
 4. **Controlador (\`controller/\`)**: Controladores REST (\`@RestController\`) con soporte CORS y endpoints HTTP.
 
@@ -716,9 +907,9 @@ Proyecto backend completo autogenerado a partir de un diagrama UML con arquitect
 
 ## 🚀 Requisitos Previos
 
-- **Java JDK 17** o superior instalado.
+- **Java JDK 17, 21 o 23+** instalado y en el PATH del sistema.
 - **PostgreSQL** instalado y en ejecución en el puerto \`${config.dbPort}\`.
-- Un IDE como **IntelliJ IDEA**, **Eclipse** o **VS Code**.
+- **NO necesitas tener Maven instalado manualmente**: este proyecto incluye \`mvnw.cmd\` (Windows) y \`mvnw\` (Linux/macOS) que configuran Maven automáticamente.
 
 ---
 
@@ -733,19 +924,38 @@ CREATE DATABASE ${config.dbName};
 
 ### 2. Verificar credenciales de base de datos
 Revisa el archivo \`src/main/resources/application.properties\`:
+- **URL**: \`jdbc:postgresql://${config.dbHost}:${config.dbPort}/${config.dbName}\`
 - **Usuario**: \`${config.dbUser}\`
 - **Contraseña**: \`${config.dbPassword}\`
-- **Base de datos**: \`${config.dbName}\`
 
 Si tus credenciales locales son diferentes, cámbialas en ese archivo.
 
-### 3. Ejecutar desde el IDE
-- **IntelliJ IDEA**: Abre la carpeta del proyecto, espera a que Maven sincronice las dependencias y dale clic al botón verde de "Run" en la clase \`BackendApplication.java\`.
-- **VS Code / Eclipse**: Abre la carpeta y ejecuta \`BackendApplication.java\`.
-- **Línea de comandos (Maven)**:
-  \`\`\`bash
-  mvn spring-boot:run
-  \`\`\`
+### 3. Ejecutar el Proyecto
+
+#### Opción A: Desde Terminal en Windows (PowerShell / CMD) - ¡Recomendada!
+Ejecuta el script wrapper incluido (descargará Maven automáticamente la primera vez):
+\`\`\`powershell
+.\\mvnw.cmd spring-boot:run
+\`\`\`
+*(o también \`.\\mvnw spring-boot:run\`)*
+
+#### Opción B: Desde Terminal en Linux / macOS
+\`\`\`bash
+chmod +x mvnw
+./mvnw spring-boot:run
+\`\`\`
+
+#### Opción C: Desde Visual Studio Code (VS Code)
+1. Abre la carpeta descomprimida en VS Code (\`File > Open Folder\`).
+2. Con la extensión oficial **Extension Pack for Java** instalada, abre el archivo:
+   \`src/main/java/${config.packageName.replace(/\./g, '/')}/BackendApplication.java\`
+3. Haz clic en el botón **Run** (o presiona \`F5\`).
+   *Nota: Como este proyecto usa Java estándar puro (sin Lombok), compila y corre directamente en Java 23 sin errores de compilador.*
+
+#### Opción D: Desde IntelliJ IDEA / Eclipse
+1. Abre la carpeta del proyecto como proyecto Maven existente.
+2. Espera a que cargue las dependencias.
+3. Haz clic derecho en \`BackendApplication.java\` -> **Run 'BackendApplication'**.
 
 El servidor arrancará en: **\`http://localhost:${config.serverPort}\`**
 
@@ -788,6 +998,27 @@ export const generateAllSpringBootFiles = (
     language: 'xml',
   });
 
+  // mvnw.cmd (Windows Wrapper ejecutable)
+  files.push({
+    path: 'mvnw.cmd',
+    content: generateMvnwCmd(),
+    language: 'properties',
+  });
+
+  // mvnw (Linux/macOS Wrapper ejecutable)
+  files.push({
+    path: 'mvnw',
+    content: generateMvnw(),
+    language: 'properties',
+  });
+
+  // .mvn/wrapper/maven-wrapper.properties
+  files.push({
+    path: '.mvn/wrapper/maven-wrapper.properties',
+    content: generateMavenWrapperProperties(),
+    language: 'properties',
+  });
+
   // application.properties
   files.push({
     path: 'src/main/resources/application.properties',
@@ -806,6 +1037,13 @@ export const generateAllSpringBootFiles = (
   files.push({
     path: `src/main/java/${packagePath}/config/CorsConfig.java`,
     content: generateCorsConfigCode(config.packageName),
+    language: 'java',
+  });
+
+  // SchemaController.java (Metadata para app móvil Flutter y clientes dinámicos)
+  files.push({
+    path: `src/main/java/${packagePath}/controller/SchemaController.java`,
+    content: generateSchemaControllerCode(classNodes, edges, config.packageName),
     language: 'java',
   });
 

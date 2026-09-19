@@ -287,8 +287,11 @@ export const SpringBootExportModal: React.FC<SpringBootExportModalProps> = ({
                 fontWeight: '500',
               }}
             >
-              <optgroup label="Configuraciones Base">
-                <option value="pom.xml">pom.xml (Dependencias Maven, Spring Boot, PostgreSQL, Lombok)</option>
+              <optgroup label="Configuraciones Base & Maven Wrapper">
+                <option value="pom.xml">pom.xml (Dependencias Maven, Spring Boot, PostgreSQL)</option>
+                <option value="mvnw.cmd">mvnw.cmd (Script ejecutable Windows sin Maven instalado)</option>
+                <option value="mvnw">mvnw (Script ejecutable Linux/macOS sin Maven instalado)</option>
+                <option value=".mvn/wrapper/maven-wrapper.properties">.mvn/wrapper/maven-wrapper.properties</option>
                 <option value="src/main/resources/application.properties">application.properties (PostgreSQL & Servidor)</option>
                 <option value={`src/main/java/${config.packageName.replace(/\./g, '/')}/BackendApplication.java`}>BackendApplication.java (@SpringBootApplication)</option>
                 <option value={`src/main/java/${config.packageName.replace(/\./g, '/')}/config/CorsConfig.java`}>CorsConfig.java (Configuración CORS)</option>
@@ -368,7 +371,7 @@ export const SpringBootExportModal: React.FC<SpringBootExportModalProps> = ({
           }}
         >
           <div style={{ fontSize: '12px', color: '#64748b' }}>
-            Listo para descomprimir y correr con: <code>mvn spring-boot:run</code>
+            Listo para descomprimir y correr con: <code>.\mvnw.cmd spring-boot:run</code> o desde VS Code / IntelliJ (F5)
           </div>
 
           <div style={{ display: 'flex', gap: '10px' }}>
