@@ -31,14 +31,14 @@ export const UmlExportModal: React.FC<UmlExportModalProps> = ({ isOpen, onClose 
   if (!isOpen) return null;
 
   // Descargar archivo exportado
-  const handleDownload = () => {
+  const handleDownload = (overrideExt?: 'xml' | 'xmi') => {
     try {
-      const ext = exportFormat === 'xmi' ? 'xmi' : 'puml';
-      const mime = exportFormat === 'xmi' ? 'application/xml;charset=utf-8' : 'text/plain;charset=utf-8';
+      const ext = overrideExt || (exportFormat === 'xmi' ? 'xml' : 'puml');
+      const mime = (ext === 'xmi' || ext === 'xml') ? 'application/xml;charset=utf-8' : 'text/plain;charset=utf-8';
       const blob = new Blob([exportContent], { type: mime });
       const safeProjectName = (projectName || 'diagrama-uml').replace(/[^a-zA-Z0-9_-]/g, '_');
       saveAs(blob, `${safeProjectName}.${ext}`);
-      toast.success(`Archivo .${ext} exportado exitosamente`);
+      toast.success(`Archivo .${ext} descargado exitosamente`);
     } catch (err) {
       toast.error('Error al generar la descarga del archivo');
     }
@@ -61,9 +61,9 @@ export const UmlExportModal: React.FC<UmlExportModalProps> = ({ isOpen, onClose 
         <div className="modal-header">
           <div className="modal-title-group">
             <div>
-              <h2 className="modal-title">Exportar a Editor UML</h2>
+              <h2 className="modal-title">Exportar a Enterprise Architect / PlantUML</h2>
               <p className="modal-subtitle">
-                Exporta tu diagrama en formato estándar XMI 2.1 para Enterprise Architect / Visual Paradigm o texto PlantUML.
+                Exporta tu diagrama en formato estándar XMI 2.1 compatible con Enterprise Architect (Sparx Systems) o código PlantUML.
               </p>
             </div>
           </div>
@@ -84,7 +84,7 @@ export const UmlExportModal: React.FC<UmlExportModalProps> = ({ isOpen, onClose 
                   style={{ padding: '8px 16px', borderRadius: '8px', cursor: 'pointer' }}
                   onClick={() => setExportFormat('xmi')}
                 >
-                  <strong>Enterprise Architect (XMI 2.1)</strong>
+                  <strong>Enterprise Architect (XML / XMI 2.1)</strong>
                 </button>
                 <button
                   type="button"
@@ -108,15 +108,21 @@ export const UmlExportModal: React.FC<UmlExportModalProps> = ({ isOpen, onClose 
             </div>
 
             {/* Guía explicativa del formato */}
-            <div style={{ backgroundColor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '12px 16px', fontSize: '13px', color: '#334155' }}>
+            <div style={{ backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '8px', padding: '12px 16px', fontSize: '13px', color: '#166534' }}>
               {exportFormat === 'xmi' ? (
-                <>
-                  <strong>Formato XMI 2.1 (UML 2.1):</strong> Compatible directamente con <em>Enterprise Architect</em> (menú <code>Publish &gt; Export Package to XMI</code>), <em>Visual Paradigm</em> y herramientas estándar OMG. Incluye extensión de coordenadas para ubicar las clases en el lienzo de escritorio.
-                </>
+                <div>
+                  <strong>Instrucciones para Enterprise Architect:</strong>
+                  <ol style={{ margin: '6px 0 0 18px', padding: 0 }}>
+                    <li>Descarga el archivo haciendo clic en <strong>Descargar .xml</strong> (o <strong>.xmi</strong>).</li>
+                    <li>En Enterprise Architect, haz clic derecho sobre tu paquete &gt; <strong>Import/Export &gt; Import Package from XML...</strong></li>
+                    <li>En la ventana, haz clic en el botón <strong>[...] (Examinar)</strong> y navega a tu carpeta de <em>Descargas</em> para seleccionar el archivo descargado.</li>
+                    <li>Presiona <strong>Import</strong>. Tu modelo y coordenadas del diagrama se cargarán automáticamente.</li>
+                  </ol>
+                </div>
               ) : (
-                <>
+                <div>
                   <strong>Formato PlantUML:</strong> Código legible y ligero compatible con la extensión de VS Code PlantUML, servidores en línea y Enterprise Architect (UML Script). Soporta clases intermedias para relaciones N:M <code>(A, B) .. C</code>.
-                </>
+                </div>
               )}
             </div>
 
@@ -127,7 +133,7 @@ export const UmlExportModal: React.FC<UmlExportModalProps> = ({ isOpen, onClose 
                 value={exportContent}
                 style={{
                   width: '100%',
-                  height: '240px',
+                  height: '220px',
                   fontFamily: 'Consolas, Monaco, "Courier New", monospace',
                   fontSize: '12px',
                   padding: '12px',
@@ -142,7 +148,7 @@ export const UmlExportModal: React.FC<UmlExportModalProps> = ({ isOpen, onClose 
             </div>
 
             {/* Botones de acción */}
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '8px' }}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', flexWrap: 'wrap', gap: '10px', marginTop: '8px' }}>
               <button
                 type="button"
                 className="modal-cancel-btn"
@@ -158,14 +164,37 @@ export const UmlExportModal: React.FC<UmlExportModalProps> = ({ isOpen, onClose 
               >
                 Copiar código
               </button>
-              <button
-                type="button"
-                className="btn-primary"
-                onClick={handleDownload}
-                title="Descargar archivo en tu computadora"
-              >
-                Descargar archivo .{exportFormat === 'xmi' ? 'xmi' : 'puml'}
-              </button>
+
+              {exportFormat === 'xmi' ? (
+                <>
+                  <button
+                    type="button"
+                    className="modal-cancel-btn"
+                    style={{ borderColor: '#3b82f6', color: '#1d4ed8', fontWeight: 600 }}
+                    onClick={() => handleDownload('xmi')}
+                    title="Descargar con extensión .xmi"
+                  >
+                    Descargar .xmi
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-primary"
+                    onClick={() => handleDownload('xml')}
+                    title="Descargar con extensión .xml (Recomendado para la ventana Import Package from XML de EA)"
+                  >
+                    Descargar .xml (Recomendado EA)
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={() => handleDownload()}
+                  title="Descargar archivo en tu computadora"
+                >
+                  Descargar archivo .puml
+                </button>
+              )}
             </div>
           </div>
         </div>

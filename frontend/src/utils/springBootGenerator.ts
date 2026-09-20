@@ -748,11 +748,7 @@ export const generateSchemaControllerCode = (
 
     code += `        List<Map<String, Object>> rels${idx} = new ArrayList<>();\n`;
     relations.forEach((rel) => {
-      code += `        Map<String, Object> rel_${rel.targetFieldName} = new LinkedHashMap<>();\n`;
-      code += `        rel_${rel.targetFieldName}.put("type", "${rel.type}");\n`;
-      code += `        rel_${rel.targetFieldName}.put("targetClass", "${rel.targetClass}");\n`;
-      code += `        rel_${rel.targetFieldName}.put("fieldName", "${rel.targetFieldName}");\n`;
-      code += `        rels${idx}.add(rel_${rel.targetFieldName});\n`;
+      code += `        rels${idx}.add(createRelation("${rel.type}", "${rel.targetClass}", "${rel.targetFieldName}"));\n`;
     });
     code += `        entity${idx}.put("relations", rels${idx});\n`;
     code += `        entities.add(entity${idx});\n\n`;
@@ -768,6 +764,14 @@ export const generateSchemaControllerCode = (
   code += `        field.put("label", label);\n`;
   code += `        field.put("readOnly", readOnly);\n`;
   code += `        return field;\n`;
+  code += `    }\n\n`;
+
+  code += `    private Map<String, Object> createRelation(String type, String targetClass, String fieldName) {\n`;
+  code += `        Map<String, Object> rel = new LinkedHashMap<>();\n`;
+  code += `        rel.put("type", type);\n`;
+  code += `        rel.put("targetClass", targetClass);\n`;
+  code += `        rel.put("fieldName", fieldName);\n`;
+  code += `        return rel;\n`;
   code += `    }\n`;
   code += `}\n`;
 

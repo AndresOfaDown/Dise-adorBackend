@@ -30,6 +30,8 @@ export const xmiToVisibility = (vis: string | null | undefined): '+' | '-' | '#'
   }
 };
 
+import { exportToXmi as exportToXmiNative } from './umlXmiExport';
+
 /**
  * Genera un archivo XMI versión 2.1 compatible al 100% con Enterprise Architect (Sparx Systems)
  */
@@ -38,132 +40,9 @@ export const exportToXmi = (
   edges: Edge[],
   projectName: string = 'ModeloUML'
 ): string => {
-  const classNodes = nodes.filter((n) => n.type === 'umlClass' && n.data?.name);
-  const safeProjectName = projectName.replace(/[^a-zA-Z0-9_]/g, '_') || 'ModeloUML';
-
-  // Mapa de IDs para referencias seguras
-  const idMap: Record<string, string> = {};
-  classNodes.forEach((node, idx) => {
-    idMap[node.id] = `EAID_CLASS_${idx + 1}_${node.id.replace(/[^a-zA-Z0-9_]/g, '_')}`;
-  });
-
-  let xml = `<?xml version="1.0" encoding="UTF-8"?>\n`;
-  xml += `<xmi:XMI xmi:version="2.1" xmlns:uml="http://schema.omg.org/spec/UML/2.1" xmlns:xmi="http://schema.omg.org/spec/XMI/2.1">\n`;
-  xml += `  <xmi:Documentation exporter="UMLCraft" exporterVersion="1.0"/>\n`;
-  xml += `  <uml:Model xmi:type="uml:Model" name="${safeProjectName}" xmi:id="EAID_MODEL_ROOT">\n`;
-  xml += `    <packagedElement xmi:type="uml:Package" name="${safeProjectName}_Package" xmi:id="EAID_PKG_1">\n`;
-
-  // 1. Exportar Clases
-  classNodes.forEach((node) => {
-    const classId = idMap[node.id];
-    const className = node.data.name || 'Clase';
-
-    xml += `      <packagedElement xmi:type="uml:Class" name="${className}" xmi:id="${classId}">\n`;
-
-    // Atributos de la clase
-    if (node.data.attributes && Array.isArray(node.data.attributes)) {
-      node.data.attributes.forEach((attr, aIdx) => {
-        const attrId = `${classId}_attr_${aIdx + 1}`;
-        const attrName = attr.name || `attr${aIdx + 1}`;
-        const vis = visibilityToXmi(attr.visibility);
-        const attrType = attr.type || 'String';
-
-        xml += `        <ownedAttribute xmi:type="uml:Property" name="${attrName}" visibility="${vis}" xmi:id="${attrId}">\n`;
-        xml += `          <type xmi:type="uml:PrimitiveType" href="http://schema.omg.org/spec/UML/2.1/uml.xml#${attrType}"/>\n`;
-        xml += `        </ownedAttribute>\n`;
-      });
-    }
-
-    // Métodos / Operaciones de la clase
-    if (node.data.methods && Array.isArray(node.data.methods)) {
-      node.data.methods.forEach((meth, mIdx) => {
-        const methId = `${classId}_meth_${mIdx + 1}`;
-        const methName = meth.name.replace(/\(\)$/, '') || `metodo${mIdx + 1}`;
-        const vis = visibilityToXmi(meth.visibility);
-
-        xml += `        <ownedOperation xmi:type="uml:Operation" name="${methName}" visibility="${vis}" xmi:id="${methId}">\n`;
-        if (meth.returnType && meth.returnType !== 'void') {
-          xml += `          <ownedParameter xmi:type="uml:Parameter" direction="return" xmi:id="${methId}_ret">\n`;
-          xml += `            <type xmi:type="uml:PrimitiveType" href="http://schema.omg.org/spec/UML/2.1/uml.xml#${meth.returnType}"/>\n`;
-          xml += `          </ownedParameter>\n`;
-        }
-        xml += `        </ownedOperation>\n`;
-      });
-    }
-
-    // Generalizaciones (Herencias salientes de esta clase)
-    const generalizations = edges.filter(
-      (e) => e.source === node.id && (e.data?.relationType === 'generalization' || e.data?.relationType === 'inheritance')
-    );
-    generalizations.forEach((genEdge, gIdx) => {
-      const targetClassId = idMap[genEdge.target];
-      if (targetClassId) {
-        xml += `        <generalization xmi:type="uml:Generalization" general="${targetClassId}" xmi:id="${classId}_gen_${gIdx + 1}"/>\n`;
-      }
-    });
-
-    xml += `      </packagedElement>\n`;
-  });
-
-  // 2. Exportar Asociaciones, Composiciones, Agregaciones y Dependencias
-  edges.forEach((edge, eIdx) => {
-    const relType = edge.data?.relationType || 'association';
-    if (relType === 'generalization' || relType === 'inheritance') {
-      return; // Ya incluidas dentro de cada uml:Class
-    }
-
-    const sourceClassId = idMap[edge.source];
-    const targetClassId = idMap[edge.target];
-    if (!sourceClassId || !targetClassId) return;
-
-    const assocId = `EAID_ASSOC_${eIdx + 1}`;
-    const assocName = edge.data?.label || `Relacion_${eIdx + 1}`;
-    const srcMult = edge.data?.sourceMultiplicity || '';
-    const tgtMult = edge.data?.targetMultiplicity || '';
-
-    if (relType === 'dependency') {
-      xml += `      <packagedElement xmi:type="uml:Dependency" name="${assocName}" supplier="${targetClassId}" client="${sourceClassId}" xmi:id="${assocId}"/>\n`;
-    } else {
-      let aggregationTgt = '';
-      if (relType === 'composition') {
-        aggregationTgt = ' aggregation="composite"';
-      } else if (relType === 'aggregation') {
-        aggregationTgt = ' aggregation="shared"';
-      }
-
-      const end1Id = `${assocId}_end1`;
-      const end2Id = `${assocId}_end2`;
-
-      xml += `      <packagedElement xmi:type="uml:Association" name="${assocName}" xmi:id="${assocId}">\n`;
-      xml += `        <memberEnd xmi:idref="${end1Id}"/>\n`;
-      xml += `        <memberEnd xmi:idref="${end2Id}"/>\n`;
-
-      // End 1 (Source)
-      xml += `        <ownedEnd xmi:type="uml:Property" type="${sourceClassId}" xmi:id="${end1Id}">\n`;
-      if (srcMult) {
-        xml += `          <lowerValue xmi:type="uml:LiteralString" value="${srcMult}" xmi:id="${end1Id}_low"/>\n`;
-        xml += `          <upperValue xmi:type="uml:LiteralString" value="${srcMult}" xmi:id="${end1Id}_up"/>\n`;
-      }
-      xml += `        </ownedEnd>\n`;
-
-      // End 2 (Target)
-      xml += `        <ownedEnd xmi:type="uml:Property" type="${targetClassId}"${aggregationTgt} xmi:id="${end2Id}">\n`;
-      if (tgtMult) {
-        xml += `          <lowerValue xmi:type="uml:LiteralString" value="${tgtMult}" xmi:id="${end2Id}_low"/>\n`;
-        xml += `          <upperValue xmi:type="uml:LiteralString" value="${tgtMult}" xmi:id="${end2Id}_up"/>\n`;
-      }
-      xml += `        </ownedEnd>\n`;
-
-      xml += `      </packagedElement>\n`;
-    }
-  });
-
-  xml += `    </packagedElement>\n`;
-  xml += `  </uml:Model>\n`;
-  xml += `</xmi:XMI>\n`;
-
-  return xml;
+  return exportToXmiNative(nodes, edges, projectName);
 };
+
 
 /**
  * Genera código PlantUML (.puml) estructurado a partir del diagrama actual

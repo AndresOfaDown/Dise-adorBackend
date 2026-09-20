@@ -283,19 +283,7 @@ export const ToolSidebar: React.FC = () => {
               <span className="action-item-title">Importar desde Editor UML (XMI / PlantUML)</span>
             </button>
 
-            {/* 5. Exportar como SQL */}
-            <button
-              type="button"
-              className="sidebar-action-item"
-              onClick={() => {
-                toast('Exportación a SQL disponible próximamente');
-              }}
-              title="Generar scripts DDL SQL"
-            >
-              <span className="action-item-title">Exportar como SQL</span>
-            </button>
-
-            {/* 6. Exportar a Backend Spring Boot (CU04) */}
+            {/* 5. Exportar a Backend Spring Boot (CU04) */}
             <button
               type="button"
               className="sidebar-action-item"
@@ -308,7 +296,7 @@ export const ToolSidebar: React.FC = () => {
               </span>
             </button>
 
-            {/* 7. Limpiar Todo el Diagrama */}
+            {/* 6. Limpiar Todo el Diagrama */}
             <button
               type="button"
               className="sidebar-action-item danger-action"
