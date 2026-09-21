@@ -3,6 +3,8 @@ import toast from 'react-hot-toast';
 import { useDiagramStore } from '../../store/diagramStore';
 import { useNavigationStore } from '../../store/navigationStore';
 
+import { ShareProjectModal } from './modals/ShareProjectModal';
+
 interface EditorHeaderProps {
   isAiPanelOpen?: boolean;
   onToggleAiPanel?: () => void;
@@ -24,16 +26,7 @@ export const EditorHeader: React.FC<EditorHeaderProps> = ({ isAiPanelOpen, onTog
 
   const [isEditingName, setIsEditingName] = useState(false);
   const [tempName, setTempName] = useState(projectName);
-
-  // Copiar enlace directo para colaborar en este proyecto
-  const handleShareLink = () => {
-    const url = new URL(window.location.href);
-    if (activeProjectId) {
-      url.searchParams.set('project', String(activeProjectId));
-    }
-    navigator.clipboard.writeText(url.toString());
-    toast.success('¡Enlace de colaboración copiado! Compártelo con otro usuario.');
-  };
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
 
   React.useEffect(() => {
     setTempName(projectName);
@@ -161,12 +154,13 @@ export const EditorHeader: React.FC<EditorHeaderProps> = ({ isAiPanelOpen, onTog
             </div>
           )}
 
-          {/* Botón Compartir Enlace */}
+
+          {/* Botón Compartir Proyecto */}
           <button
             type="button"
             className="editor-share-btn"
-            onClick={handleShareLink}
-            title="Copiar enlace para colaborar en este diagrama"
+            onClick={() => setIsShareModalOpen(true)}
+            title="Abrir opciones para compartir y colaborar en tiempo real"
           >
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M4 12v8a2 2 0 002 2h12a2 2 0 002-2v-8" />
@@ -232,8 +226,14 @@ export const EditorHeader: React.FC<EditorHeaderProps> = ({ isAiPanelOpen, onTog
           )}
         </button>
       </div>
+
+      {/* Modal para Compartir y Colaboración en Tiempo Real */}
+      <ShareProjectModal
+        isOpen={isShareModalOpen}
+        onClose={() => setIsShareModalOpen(false)}
+        projectId={activeProjectId}
+        projectName={projectName}
+      />
     </header>
   );
 };
-
-

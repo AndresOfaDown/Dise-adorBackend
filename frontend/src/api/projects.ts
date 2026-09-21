@@ -6,6 +6,10 @@ export interface Proyecto {
   create_at?: string;
   update_at?: string;
   last_edited_at?: string;
+  owner_username?: string;
+  owner_email?: string;
+  is_owner?: boolean;
+  colaboradores?: Array<{ id: number; username: string; email: string }>;
 }
 
 export interface DiagramaData {
@@ -21,6 +25,11 @@ export interface ProyectoConDiagrama {
 }
 
 export const projectsApi = {
+  join: async (code: string): Promise<ProyectoConDiagrama> => {
+    const response = await apiClient.post<ProyectoConDiagrama>('/api/projects/join/', { code });
+    return response.data;
+  },
+
   list: async (): Promise<Proyecto[]> => {
     const response = await apiClient.get<Proyecto[]>('/api/projects/');
     return response.data;

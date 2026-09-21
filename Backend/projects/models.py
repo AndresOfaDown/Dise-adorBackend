@@ -12,6 +12,11 @@ class Proyecto(models.Model):
         on_delete=models.CASCADE,
         related_name='proyectos'
     )
+    colaboradores = models.ManyToManyField(
+        settings.AUTH_USER_MODEL,
+        related_name='proyectos_colaborando',
+        blank=True
+    )
 
     class Meta:
         db_table = 'proyecto'

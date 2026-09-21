@@ -3,6 +3,7 @@ import toast from 'react-hot-toast';
 import { useAuthStore } from '../../store/authStore';
 import { useNavigationStore } from '../../store/navigationStore';
 import { projectsApi, type Proyecto } from '../../api/projects';
+import { JoinProjectModal } from '../editor/modals/JoinProjectModal';
 
 export const ProjectsListPage: React.FC = () => {
   const { user, logout } = useAuthStore();
@@ -11,9 +12,11 @@ export const ProjectsListPage: React.FC = () => {
   const [projects, setProjects] = useState<Proyecto[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
+  const [filterTab, setFilterTab] = useState<'all' | 'mine' | 'shared'>('all');
 
   // Estados de Modales
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [isJoinModalOpen, setIsJoinModalOpen] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
   const [isCreating, setIsCreating] = useState(false);
 
@@ -107,9 +110,16 @@ export const ProjectsListPage: React.FC = () => {
     }
   };
 
-  const filteredProjects = projects.filter((p) =>
-    p.package_base.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredProjects = projects.filter((p) => {
+    const matchesSearch = p.package_base.toLowerCase().includes(searchQuery.toLowerCase());
+    if (!matchesSearch) return false;
+    if (filterTab === 'mine') return p.is_owner !== false;
+    if (filterTab === 'shared') return p.is_owner === false;
+    return true;
+  });
+
+  const ownedCount = projects.filter((p) => p.is_owner !== false).length;
+  const sharedCount = projects.filter((p) => p.is_owner === false).length;
 
   return (
     <div className="projects-page-container">
@@ -157,53 +167,115 @@ export const ProjectsListPage: React.FC = () => {
             <span className="projects-hero-tag">CU01: Gestionar Proyecto</span>
             <h1 className="projects-hero-title">Mis Proyectos de Diseño de Software</h1>
             <p className="projects-hero-desc">
-              Crea nuevos proyectos con nombres personalizados, explora tus modelos UML guardados, renómbralos y continúa diseñando en cualquier momento.
+              Crea nuevos proyectos con nombres personalizados, colabora en tiempo real con otros usuarios y continúa diseñando en cualquier momento.
             </p>
           </div>
 
-          <button
-            type="button"
-            className="btn-create-project-primary"
-            onClick={() => {
-              setNewProjectName(`Sistema_${projects.length + 1}`);
-              setIsCreateModalOpen(true);
-            }}
-          >
-            <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.2" d="M12 4v16m8-8H4" />
-            </svg>
-            <span>Crear Nuevo Proyecto</span>
-          </button>
+          <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              className="btn-modal-cancel"
+              style={{
+                padding: '10px 18px',
+                fontSize: '14px',
+                borderRadius: '10px',
+                fontWeight: 600,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '8px',
+                backgroundColor: '#f0fdf4',
+                borderColor: '#bbf7d0',
+                color: '#166534',
+                cursor: 'pointer',
+              }}
+              onClick={() => setIsJoinModalOpen(true)}
+              title="Unirse a un proyecto mediante código o ID"
+            >
+              <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth="2"
+                  d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"
+                />
+              </svg>
+              <span>Unirse con Código</span>
+            </button>
+
+            <button
+              type="button"
+              className="btn-create-project-primary"
+              onClick={() => {
+                setNewProjectName(`Sistema_${projects.length + 1}`);
+                setIsCreateModalOpen(true);
+              }}
+            >
+              <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.2" d="M12 4v16m8-8H4" />
+              </svg>
+              <span>Crear Nuevo Proyecto</span>
+            </button>
+          </div>
         </div>
 
-        {/* Barra de Filtro y Búsqueda */}
-        <div className="projects-filter-bar">
-          <div className="search-input-wrapper">
-            <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="#64748b">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-            </svg>
-            <input
-              type="text"
-              placeholder="Buscar proyecto por nombre o package..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="projects-search-input"
-            />
-            {searchQuery && (
-              <button
-                type="button"
-                className="search-clear-btn"
-                onClick={() => setSearchQuery('')}
-              >
-                ×
-              </button>
-            )}
+        {/* Barra de Filtro, Pestañas y Búsqueda */}
+        <div className="projects-filter-bar" style={{ flexWrap: 'wrap', gap: '12px' }}>
+          <div style={{ display: 'flex', gap: '6px' }}>
+            <button
+              type="button"
+              className={`tab-pill-btn ${filterTab === 'all' ? 'active' : ''}`}
+              style={{ padding: '6px 14px', fontSize: '13px', borderRadius: '8px' }}
+              onClick={() => setFilterTab('all')}
+            >
+              Todos ({projects.length})
+            </button>
+            <button
+              type="button"
+              className={`tab-pill-btn ${filterTab === 'mine' ? 'active' : ''}`}
+              style={{ padding: '6px 14px', fontSize: '13px', borderRadius: '8px' }}
+              onClick={() => setFilterTab('mine')}
+            >
+              Mis Proyectos ({ownedCount})
+            </button>
+            <button
+              type="button"
+              className={`tab-pill-btn ${filterTab === 'shared' ? 'active' : ''}`}
+              style={{ padding: '6px 14px', fontSize: '13px', borderRadius: '8px' }}
+              onClick={() => setFilterTab('shared')}
+            >
+              Compartidos ({sharedCount})
+            </button>
           </div>
 
-          <div className="projects-count-badge">
-            Total: <strong>{filteredProjects.length}</strong> {filteredProjects.length === 1 ? 'proyecto' : 'proyectos'}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: '240px', justifyContent: 'flex-end' }}>
+            <div className="search-input-wrapper" style={{ maxWidth: '360px', width: '100%' }}>
+              <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="#64748b">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+              <input
+                type="text"
+                placeholder="Buscar proyecto por nombre..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="projects-search-input"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  className="search-clear-btn"
+                  onClick={() => setSearchQuery('')}
+                >
+                  ×
+                </button>
+              )}
+            </div>
+
+            <div className="projects-count-badge">
+              <strong>{filteredProjects.length}</strong> {filteredProjects.length === 1 ? 'proyecto' : 'proyectos'}
+            </div>
           </div>
         </div>
+
 
         {/* Lista o Grid de Proyectos */}
         {isLoading ? (
@@ -265,21 +337,45 @@ export const ProjectsListPage: React.FC = () => {
                       >
                         {project.package_base}
                       </h3>
-                      <button
-                        type="button"
-                        className="proj-rename-quick-btn"
-                        title="Renombrar proyecto"
-                        onClick={() => {
-                          setEditingProject(project);
-                          setEditName(project.package_base);
-                        }}
-                      >
-                        ✎
-                      </button>
+                      {project.is_owner === false && (
+                        <span
+                          style={{
+                            fontSize: '11px',
+                            fontWeight: 600,
+                            padding: '2px 8px',
+                            borderRadius: '12px',
+                            background: '#e0f2fe',
+                            color: '#0284c7',
+                            border: '1px solid #bae6fd',
+                            whiteSpace: 'nowrap'
+                          }}
+                        >
+                          🤝 Compartido
+                        </span>
+                      )}
+                      {project.is_owner !== false && (
+                        <button
+                          type="button"
+                          className="proj-rename-quick-btn"
+                          title="Renombrar proyecto"
+                          onClick={() => {
+                            setEditingProject(project);
+                            setEditName(project.package_base);
+                          }}
+                        >
+                          ✎
+                        </button>
+                      )}
                     </div>
 
                     <div className="proj-card-dates">
                       <span>ID: #{project.id}</span>
+                      {project.is_owner === false && project.owner_username && (
+                        <>
+                          <span>•</span>
+                          <span style={{ color: '#0284c7' }}>Propietario: {project.owner_username}</span>
+                        </>
+                      )}
                       <span>•</span>
                       <span>
                         Modificado:{' '}
@@ -308,28 +404,32 @@ export const ProjectsListPage: React.FC = () => {
                     </svg>
                   </button>
 
-                  <button
-                    type="button"
-                    className="btn-proj-action-secondary"
-                    onClick={() => {
-                      setEditingProject(project);
-                      setEditName(project.package_base);
-                    }}
-                    title="Cambiar el nombre del proyecto"
-                  >
-                    Renombrar
-                  </button>
+                  {project.is_owner !== false && (
+                    <button
+                      type="button"
+                      className="btn-proj-action-secondary"
+                      onClick={() => {
+                        setEditingProject(project);
+                        setEditName(project.package_base);
+                      }}
+                      title="Cambiar el nombre del proyecto"
+                    >
+                      Renombrar
+                    </button>
+                  )}
 
-                  <button
-                    type="button"
-                    className="btn-proj-action-danger"
-                    onClick={() => setDeletingProject(project)}
-                    title="Eliminar este proyecto"
-                  >
-                    <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                    </svg>
-                  </button>
+                  {project.is_owner !== false && (
+                    <button
+                      type="button"
+                      className="btn-proj-action-danger"
+                      onClick={() => setDeletingProject(project)}
+                      title="Eliminar este proyecto"
+                    >
+                      <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                      </svg>
+                    </button>
+                  )}
                 </div>
               </div>
             ))}
@@ -510,6 +610,15 @@ export const ProjectsListPage: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Modal: Unirse a Proyecto con Código */}
+      <JoinProjectModal
+        isOpen={isJoinModalOpen}
+        onClose={() => {
+          setIsJoinModalOpen(false);
+          loadProjects();
+        }}
+      />
     </div>
   );
 };

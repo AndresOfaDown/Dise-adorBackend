@@ -3,6 +3,7 @@ import toast from 'react-hot-toast';
 import { useAuthStore } from '../../store/authStore';
 import { useNavigationStore } from '../../store/navigationStore';
 import { projectsApi, type Proyecto } from '../../api/projects';
+import { JoinProjectModal } from '../editor/modals/JoinProjectModal';
 
 export const WelcomeDashboard: React.FC = () => {
   const { user, logout } = useAuthStore();
@@ -10,6 +11,7 @@ export const WelcomeDashboard: React.FC = () => {
 
   const [projects, setProjects] = useState<Proyecto[]>([]);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [isJoinModalOpen, setIsJoinModalOpen] = useState(false);
   const [customProjectName, setCustomProjectName] = useState('');
   const [isCreating, setIsCreating] = useState(false);
 
@@ -128,7 +130,38 @@ export const WelcomeDashboard: React.FC = () => {
               Explorar Proyectos →
             </button>
           </div>
+
+          {/* Tarjeta: Unirse a Proyecto Compartido */}
+          <div className="dash-card">
+            <div className="card-icon-box" style={{ backgroundColor: '#f0fdf4', color: '#16a34a' }}>
+              <svg width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth="2"
+                  d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"
+                />
+              </svg>
+            </div>
+            <h3>Unirse a Proyecto</h3>
+            <p>Ingresa el código o ID de sala compartido por otro compañero para colaborar en tiempo real.</p>
+            <button
+              type="button"
+              className="card-action-btn"
+              style={{ backgroundColor: '#16a34a', color: '#ffffff', borderColor: '#16a34a' }}
+              onClick={() => setIsJoinModalOpen(true)}
+            >
+              Unirse con Código →
+            </button>
+          </div>
         </div>
+
+        {/* Modal: Unirse a Proyecto */}
+        <JoinProjectModal
+          isOpen={isJoinModalOpen}
+          onClose={() => setIsJoinModalOpen(false)}
+        />
+
 
         {/* Modal: Crear Nuevo Proyecto con Nombre Personalizado */}
         {isCreateModalOpen && (

@@ -50,8 +50,20 @@ export function useDiagramSocket(projectId: number | null) {
 
     const connectSocket = () => {
       const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const host = window.location.hostname || 'localhost';
-      const wsUrl = `${wsProto}//${host}:8000/ws/diagrama/${projectId}/?username=${encodeURIComponent(
+      // Si el frontend está corriendo en el puerto 5173 (Vite) o en entorno local/LAN, el backend Django Channels está en el puerto 8000
+      let wsHost = window.location.host;
+      if (
+        window.location.port === '5173' ||
+        window.location.hostname === 'localhost' ||
+        window.location.hostname === '127.0.0.1' ||
+        window.location.hostname.match(/^\d+\.\d+\.\d+\.\d+$/)
+      ) {
+        wsHost = `${window.location.hostname}:8000`;
+      }
+
+      const customWs = (import.meta as any).env?.VITE_WS_URL;
+      const wsBase = customWs || `${wsProto}//${wsHost}`;
+      const wsUrl = `${wsBase}/ws/diagrama/${projectId}/?username=${encodeURIComponent(
         username
       )}&clientId=${clientIdRef.current}&color=${encodeURIComponent(userColorRef.current)}`;
 
