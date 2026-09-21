@@ -278,13 +278,64 @@ def _parse_xmi(xml_content: str) -> dict:
     classes = []
     relations = []
     id_to_name = {}
+    primitive_types = {}
+    ea_attribute_types = {}
+
+    def _clean_tag(t):
+        return t.split('}')[-1]
+
+    def _clean_type(raw):
+        if not raw:
+            return "string"
+        c = raw.strip()
+        if '#' in c:
+            c = c.split('#')[-1]
+        if c.lower().startswith('uml:'):
+            c = c.split(':')[-1]
+            if c.lower() in ('property', 'class', 'primitivetype', 'operation', 'parameter'):
+                return "string"
+        c = re.sub(r'^EA[A-Za-z0-9]*_', '', c)
+        c = re.sub(r'_(?:PK|FK)_?$', '', c, flags=re.I)
+        low = c.lower()
+        if low in ('integer', 'int'): return 'int'
+        if low in ('string', 'varchar', 'text', 'char'): return 'string'
+        if low in ('boolean', 'bool'): return 'boolean'
+        if low in ('double',): return 'double'
+        if low in ('float', 'real', 'decimal', 'unlimitednatural'): return 'float'
+        if low in ('date', 'datetime', 'timestamp', 'time'): return 'date'
+        if low in ('long', 'bigint'): return 'long'
+        if low in ('void',): return 'void'
+        return c or 'string'
+
+    # Pre-indexar IDs y tipos
+    for elem in root.iter():
+        tag = _clean_tag(elem.tag)
+        xmi_type = elem.attrib.get('{http://schema.omg.org/spec/XMI/2.1}type') or elem.attrib.get('xmi:type') or ''
+        name = elem.attrib.get('name')
+        eid = elem.attrib.get('{http://schema.omg.org/spec/XMI/2.1}id') or elem.attrib.get('xmi:id') or elem.attrib.get('{http://schema.omg.org/spec/XMI/2.1}idref') or elem.attrib.get('xmi:idref') or elem.attrib.get('id')
+
+        if eid and name:
+            id_to_name[eid] = name
+
+        if 'PrimitiveType' in xmi_type or tag == 'PrimitiveType':
+            if eid and name:
+                primitive_types[eid] = name
+
+        if tag == 'attribute':
+            prop = elem.find('properties')
+            if prop is not None and eid:
+                ptype = prop.attrib.get('type')
+                if ptype:
+                    ea_attribute_types[eid] = ptype
 
     # Extraer clases
     for elem in root.iter():
-        tag = elem.tag.split('}')[-1]
+        tag = _clean_tag(elem.tag)
         xmi_type = elem.attrib.get('{http://schema.omg.org/spec/XMI/2.1}type') or elem.attrib.get('xmi:type') or elem.attrib.get('type') or ''
 
-        if tag in ('Class', 'AssociationClass') or 'Class' in xmi_type:
+        is_assoc_only = (xmi_type == 'uml:Association' or tag == 'Association') and 'AssociationClass' not in xmi_type and tag != 'AssociationClass'
+
+        if (tag in ('Class', 'AssociationClass') or 'Class' in xmi_type) and not is_assoc_only:
             cls_name = elem.attrib.get('name')
             cls_id = elem.attrib.get('{http://schema.omg.org/spec/XMI/2.1}id') or elem.attrib.get('xmi:id') or elem.attrib.get('id')
 
@@ -294,13 +345,38 @@ def _parse_xmi(xml_content: str) -> dict:
                 methods = []
 
                 for child in elem:
-                    c_tag = child.tag.split('}')[-1]
+                    c_tag = _clean_tag(child.tag)
                     c_type = child.attrib.get('{http://schema.omg.org/spec/XMI/2.1}type') or child.attrib.get('xmi:type') or ''
 
                     if c_tag in ('Property', 'Attribute') or 'Property' in c_type or c_tag == 'ownedAttribute':
                         a_name = child.attrib.get('name')
-                        if a_name:
-                            attrs.append(f"+ {a_name}: string")
+                        if not a_name or child.attrib.get('association'):
+                            continue
+                        a_id = child.attrib.get('{http://schema.omg.org/spec/XMI/2.1}id') or child.attrib.get('xmi:id') or child.attrib.get('id')
+
+                        t_name = ''
+                        if a_id and a_id in ea_attribute_types:
+                            t_name = _clean_type(ea_attribute_types[a_id])
+                        if not t_name:
+                            type_child = child.find('type')
+                            if type_child is not None:
+                                tidref = type_child.attrib.get('{http://schema.omg.org/spec/XMI/2.1}idref') or type_child.attrib.get('xmi:idref') or type_child.attrib.get('href')
+                                if tidref:
+                                    if tidref in primitive_types:
+                                        t_name = _clean_type(primitive_types[tidref])
+                                    elif tidref in id_to_name:
+                                        t_name = id_to_name[tidref]
+                                    else:
+                                        t_name = _clean_type(tidref)
+                        if not t_name:
+                            direct_t = child.attrib.get('type')
+                            if direct_t and not direct_t.startswith('uml:'):
+                                t_name = _clean_type(direct_t)
+
+                        if not t_name or t_name.lower() == 'uml':
+                            t_name = 'string'
+
+                        attrs.append(f"- {a_name}: {t_name}")
 
                     elif c_tag in ('Operation',) or 'Operation' in c_type or c_tag == 'ownedOperation':
                         o_name = child.attrib.get('name')
@@ -323,18 +399,79 @@ def _parse_xmi(xml_content: str) -> dict:
                     'methods': methods,
                 })
 
-    # Mapear nombres a relaciones de generalización
+    # Extraer conectores propietarios de Enterprise Architect si existen
+    for elem in root.iter():
+        tag = _clean_tag(elem.tag)
+        if tag == 'connector':
+            src_el = elem.find('source')
+            tgt_el = elem.find('target')
+            prop_el = elem.find('properties')
+            labels_el = elem.find('labels')
+
+            src_id = (src_el.attrib.get('{http://schema.omg.org/spec/XMI/2.1}idref') or src_el.attrib.get('xmi:idref')) if src_el is not None else ''
+            tgt_id = (tgt_el.attrib.get('{http://schema.omg.org/spec/XMI/2.1}idref') or tgt_el.attrib.get('xmi:idref')) if tgt_el is not None else ''
+
+            ea_type = prop_el.attrib.get('ea_type') if prop_el is not None else 'Association'
+            subtype = prop_el.attrib.get('subtype') if prop_el is not None else ''
+
+            src_t = src_el.find('type') if src_el is not None else None
+            tgt_t = tgt_el.find('type') if tgt_el is not None else None
+
+            mult1 = src_t.attrib.get('multiplicity', '') if src_t is not None else ''
+            mult2 = tgt_t.attrib.get('multiplicity', '') if tgt_t is not None else ''
+            if not mult1 and labels_el is not None: mult1 = labels_el.attrib.get('lb', '')
+            if not mult2 and labels_el is not None: mult2 = labels_el.attrib.get('rb', '')
+
+            agg1 = src_t.attrib.get('aggregation', 'none') if src_t is not None else 'none'
+            agg2 = tgt_t.attrib.get('aggregation', 'none') if tgt_t is not None else 'none'
+
+            rel_type = 'association'
+            if ea_type == 'Generalization':
+                rel_type = 'generalization'
+            elif ea_type == 'Dependency':
+                rel_type = 'dependency'
+            elif agg2 == 'composite' or agg1 == 'composite' or subtype == 'Strong':
+                rel_type = 'composition'
+            elif agg2 == 'shared' or agg1 == 'shared' or subtype == 'Weak':
+                rel_type = 'aggregation'
+
+            final_src_id = src_id
+            final_tgt_id = tgt_id
+            final_m1 = mult1
+            final_m2 = mult2
+
+            if rel_type in ('composition', 'aggregation'):
+                if agg2 in ('composite', 'shared'):
+                    final_src_id = tgt_id
+                    final_tgt_id = src_id
+                    final_m1 = mult2
+                    final_m2 = mult1
+
+            relations.append({
+                'source_id': final_src_id,
+                'target_id': final_tgt_id,
+                'type': rel_type,
+                'sourceMultiplicity': final_m1,
+                'targetMultiplicity': final_m2,
+            })
+
+    # Mapear nombres a relaciones
     final_relations = []
     for rel in relations:
         src = id_to_name.get(rel.get('source_id'))
         tgt = id_to_name.get(rel.get('target_id'))
         if src and tgt:
-            final_relations.append({
-                'source': src,
-                'target': tgt,
-                'type': rel.get('type', 'generalization'),
-                'label': '',
-            })
+            # Evitar duplicados
+            r_type = rel.get('type', 'generalization')
+            if not any(r['source'] == src and r['target'] == tgt and r['type'] == r_type for r in final_relations):
+                final_relations.append({
+                    'source': src,
+                    'target': tgt,
+                    'type': r_type,
+                    'sourceMultiplicity': rel.get('sourceMultiplicity', ''),
+                    'targetMultiplicity': rel.get('targetMultiplicity', ''),
+                    'label': '',
+                })
 
     # Asignar posiciones en cuadrícula
     for idx, cls in enumerate(classes):

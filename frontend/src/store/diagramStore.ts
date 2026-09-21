@@ -557,12 +557,17 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
           visibility = cleanStr[0] as any;
           cleanStr = cleanStr.slice(1).trim();
         }
-        const parts = cleanStr.split(':');
+        const colonIdx = cleanStr.indexOf(':');
+        const rawName = colonIdx !== -1 ? cleanStr.substring(0, colonIdx).trim() : cleanStr;
+        let rawType = colonIdx !== -1 ? cleanStr.substring(colonIdx + 1).trim() : 'string';
+        if (!rawType || rawType.toLowerCase() === 'uml' || rawType.toLowerCase().startsWith('uml:')) {
+          rawType = 'string';
+        }
         return {
           id: `attr_${aIdx}_${Date.now()}`,
           visibility,
-          name: parts[0]?.trim() || cleanStr,
-          type: parts[1]?.trim() || 'string',
+          name: rawName,
+          type: rawType,
         };
       });
 

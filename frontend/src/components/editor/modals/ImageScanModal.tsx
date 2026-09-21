@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import toast from 'react-hot-toast';
 import { apiClient } from '../../../api/client';
 import { useDiagramStore } from '../../../store/diagramStore';
@@ -28,10 +28,20 @@ interface DetectedRelation {
 export const ImageScanModal: React.FC<ImageScanModalProps> = ({ isOpen, onClose }) => {
   const { nodes, importDiagramFromAi } = useDiagramStore();
 
+  const [activeTab, setActiveTab] = useState<'file' | 'camera'>('camera');
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [geminiKey, setGeminiKey] = useState(localStorage.getItem('user_gemini_key') || '');
   const [showKeyInput, setShowKeyInput] = useState(false);
+
+  // Estados de cámara web
+  const [isCameraActive, setIsCameraActive] = useState(false);
+  const [isCameraLoading, setIsCameraLoading] = useState(false);
+  const [cameraError, setCameraError] = useState<string | null>(null);
+
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
 
   // Resultado de análisis
   const [analysisResult, setAnalysisResult] = useState<{
@@ -40,6 +50,109 @@ export const ImageScanModal: React.FC<ImageScanModalProps> = ({ isOpen, onClose 
   } | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Detener cámara web
+  const stopCamera = useCallback(() => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+    setIsCameraActive(false);
+    setIsCameraLoading(false);
+  }, []);
+
+  // Iniciar cámara web
+  const startCamera = useCallback(async () => {
+    stopCamera();
+    setCameraError(null);
+    setIsCameraLoading(true);
+
+    try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error('Tu navegador no soporta captura de cámara en este contexto.');
+      }
+
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+            facingMode: 'environment',
+          },
+        });
+      } catch {
+        // Fallback básico
+        stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      }
+
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+      }
+      setIsCameraActive(true);
+    } catch (err: any) {
+      console.error('Error al encender cámara:', err);
+      const msg = err?.name === 'NotAllowedError'
+        ? 'Permiso de cámara denegado. Permite el acceso a la cámara en tu navegador.'
+        : err?.message || 'No se pudo activar la cámara.';
+      setCameraError(msg);
+      toast.error(msg);
+    } finally {
+      setIsCameraLoading(false);
+    }
+  }, [stopCamera]);
+
+  // Capturar foto del video
+  const handleCapturePhoto = () => {
+    if (!videoRef.current) return;
+    const video = videoRef.current;
+    const canvas = canvasRef.current || document.createElement('canvas');
+    canvasRef.current = canvas;
+
+    canvas.width = video.videoWidth || 1280;
+    canvas.height = video.videoHeight || 720;
+
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.95);
+      setSelectedImage(dataUrl);
+      setAnalysisResult(null);
+      stopCamera();
+      toast.success('¡Fotografía capturada!');
+    }
+  };
+
+  // Manejar cambio de pestaña
+  const handleTabChange = (tab: 'file' | 'camera') => {
+    setActiveTab(tab);
+    if (tab === 'camera') {
+      if (!selectedImage) {
+        startCamera();
+      }
+    } else {
+      stopCamera();
+    }
+  };
+
+  // Si se cierra el modal, limpiar todo y apagar cámara
+  useEffect(() => {
+    if (!isOpen) {
+      stopCamera();
+      setSelectedImage(null);
+      setAnalysisResult(null);
+      setCameraError(null);
+    } else {
+      if (activeTab === 'camera' && !selectedImage) {
+        startCamera();
+      }
+    }
+  }, [isOpen, activeTab, selectedImage, startCamera, stopCamera]);
 
   // Manejar selección de archivo
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -57,7 +170,7 @@ export const ImageScanModal: React.FC<ImageScanModalProps> = ({ isOpen, onClose 
   // Enviar a la API para analizar con Gemini
   const handleAnalyzeImage = async () => {
     if (!selectedImage) {
-      toast.error('Por favor selecciona una imagen');
+      toast.error('Por favor captura o selecciona una imagen');
       return;
     }
 
@@ -108,6 +221,7 @@ export const ImageScanModal: React.FC<ImageScanModalProps> = ({ isOpen, onClose 
     }
 
     // Limpiar y cerrar
+    stopCamera();
     setSelectedImage(null);
     setAnalysisResult(null);
     onClose();
@@ -116,6 +230,9 @@ export const ImageScanModal: React.FC<ImageScanModalProps> = ({ isOpen, onClose 
   const handleResetScan = () => {
     setAnalysisResult(null);
     setSelectedImage(null);
+    if (activeTab === 'camera') {
+      startCamera();
+    }
   };
 
   const translateRelationType = (type?: string) => {
@@ -140,50 +257,253 @@ export const ImageScanModal: React.FC<ImageScanModalProps> = ({ isOpen, onClose 
   const hasExistingNodes = nodes.length > 0;
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-container" onClick={(e) => e.stopPropagation()}>
+    <div className="modal-overlay" onClick={() => { stopCamera(); onClose(); }}>
+      <div className="modal-container" style={{ maxWidth: '680px' }} onClick={(e) => e.stopPropagation()}>
         {/* Header */}
         <div className="modal-header">
           <div className="modal-title-group">
             <div>
-              <h2 className="modal-title">Escanear Imagen o Archivo</h2>
+              <h2 className="modal-title">Escanear Diagrama con Cámara / Imagen</h2>
               <p className="modal-subtitle">
                 {analysisResult
                   ? 'Revisa el resultado detectado antes de insertarlo en el lienzo'
-                  : 'Sube una imagen o fotografía para que el sistema diseñe el diagrama'}
+                  : 'Muestra tu cuaderno frente a la cámara o sube una imagen'}
               </p>
             </div>
           </div>
-          <button type="button" className="modal-close-btn" onClick={onClose} title="Cerrar ventana">
+          <button
+            type="button"
+            className="modal-close-btn"
+            onClick={() => { stopCamera(); onClose(); }}
+            title="Cerrar ventana"
+          >
             ×
           </button>
         </div>
+
+        {/* Pestañas de modo: Cámara vs Archivo */}
+        {!analysisResult && (
+          <div style={{ display: 'flex', gap: '8px', padding: '12px 24px 0', borderBottom: '1px solid #e2e8f0' }}>
+            <button
+              type="button"
+              onClick={() => handleTabChange('camera')}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '8px 16px',
+                border: 'none',
+                borderBottom: activeTab === 'camera' ? '2px solid #2563eb' : '2px solid transparent',
+                backgroundColor: 'transparent',
+                color: activeTab === 'camera' ? '#2563eb' : '#64748b',
+                fontWeight: activeTab === 'camera' ? 600 : 500,
+                fontSize: '14px',
+                cursor: 'pointer',
+                transition: 'all 0.15s ease',
+              }}
+            >
+              <span>📸 Usar Cámara Web</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleTabChange('file')}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '8px 16px',
+                border: 'none',
+                borderBottom: activeTab === 'file' ? '2px solid #2563eb' : '2px solid transparent',
+                backgroundColor: 'transparent',
+                color: activeTab === 'file' ? '#2563eb' : '#64748b',
+                fontWeight: activeTab === 'file' ? 600 : 500,
+                fontSize: '14px',
+                cursor: 'pointer',
+                transition: 'all 0.15s ease',
+              }}
+            >
+              <span>📁 Subir Archivo</span>
+            </button>
+          </div>
+        )}
 
         {/* Modal Body */}
         <div className="modal-body">
           {!analysisResult ? (
             <>
-              {/* Dropzone de subida directa sin pestañas */}
-              <div className="upload-dropzone" onClick={() => fileInputRef.current?.click()}>
-                <input
-                  type="file"
-                  ref={fileInputRef}
-                  style={{ display: 'none' }}
-                  accept="image/*"
-                  onChange={handleFileChange}
-                />
-                {selectedImage ? (
-                  <div className="image-preview-box">
-                    <img src={selectedImage} alt="Foto seleccionada" className="preview-img" />
-                    <span className="change-img-text">Clic para cambiar de imagen</span>
-                  </div>
-                ) : (
-                  <div className="dropzone-empty">
-                    <p className="dropzone-text">Haz clic para seleccionar la imagen del diagrama</p>
-                    <span className="dropzone-sub">Formatos compatibles: JPG, PNG, WEBP</span>
-                  </div>
-                )}
-              </div>
+              {activeTab === 'camera' ? (
+                /* Modo Cámara Web */
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
+                  {selectedImage ? (
+                    /* Foto tomada con éxito */
+                    <div style={{ position: 'relative', width: '100%', borderRadius: '12px', overflow: 'hidden', border: '2px solid #3b82f6', backgroundColor: '#0f172a' }}>
+                      <img
+                        src={selectedImage}
+                        alt="Foto capturada del cuaderno"
+                        style={{ width: '100%', maxHeight: '360px', objectFit: 'contain', display: 'block' }}
+                      />
+                      <div style={{
+                        position: 'absolute',
+                        bottom: '12px',
+                        left: '0',
+                        right: '0',
+                        display: 'flex',
+                        justifyContent: 'center',
+                        gap: '12px',
+                      }}>
+                        <button
+                          type="button"
+                          onClick={() => { setSelectedImage(null); startCamera(); }}
+                          style={{
+                            padding: '8px 16px',
+                            backgroundColor: 'rgba(15, 23, 42, 0.85)',
+                            color: '#ffffff',
+                            border: '1px solid rgba(255, 255, 255, 0.2)',
+                            borderRadius: '8px',
+                            fontSize: '13px',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            backdropFilter: 'blur(6px)',
+                          }}
+                        >
+                          🔄 Volver a Tomar Foto
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    /* Visor de Cámara en Vivo */
+                    <div style={{
+                      position: 'relative',
+                      width: '100%',
+                      minHeight: '280px',
+                      maxHeight: '380px',
+                      borderRadius: '12px',
+                      overflow: 'hidden',
+                      backgroundColor: '#0f172a',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      border: '2px dashed #94a3b8',
+                    }}>
+                      {/* Elemento de video en vivo */}
+                      <video
+                        ref={videoRef}
+                        playsInline
+                        muted
+                        style={{
+                          width: '100%',
+                          height: '100%',
+                          maxHeight: '380px',
+                          objectFit: 'contain',
+                          display: isCameraActive ? 'block' : 'none',
+                        }}
+                      />
+                      <canvas ref={canvasRef} style={{ display: 'none' }} />
+
+                      {/* Cargando cámara */}
+                      {isCameraLoading && (
+                        <div style={{ color: '#ffffff', textAlign: 'center', padding: '24px' }}>
+                          <div className="spinner-small" style={{ margin: '0 auto 12px' }}></div>
+                          <p style={{ fontSize: '14px', margin: 0 }}>Activando cámara web...</p>
+                        </div>
+                      )}
+
+                      {/* Error de cámara */}
+                      {cameraError && !isCameraLoading && (
+                        <div style={{ color: '#ef4444', textAlign: 'center', padding: '24px' }}>
+                          <p style={{ fontSize: '14px', marginBottom: '12px' }}>⚠️ {cameraError}</p>
+                          <button
+                            type="button"
+                            onClick={startCamera}
+                            style={{
+                              padding: '6px 14px',
+                              backgroundColor: '#2563eb',
+                              color: '#fff',
+                              border: 'none',
+                              borderRadius: '6px',
+                              fontSize: '13px',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            Reintentar Conectar
+                          </button>
+                        </div>
+                      )}
+
+                      {/* Botón flotante para capturar foto */}
+                      {isCameraActive && (
+                        <div style={{
+                          position: 'absolute',
+                          bottom: '16px',
+                          left: '0',
+                          right: '0',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          alignItems: 'center',
+                          gap: '6px',
+                        }}>
+                          <button
+                            type="button"
+                            onClick={handleCapturePhoto}
+                            style={{
+                              padding: '10px 24px',
+                              backgroundColor: '#2563eb',
+                              color: '#ffffff',
+                              border: 'none',
+                              borderRadius: '24px',
+                              fontSize: '14px',
+                              fontWeight: 700,
+                              cursor: 'pointer',
+                              boxShadow: '0 4px 14px rgba(37, 99, 235, 0.5)',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '8px',
+                            }}
+                          >
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                              <circle cx="12" cy="12" r="10" />
+                              <circle cx="12" cy="12" r="4" fill="currentColor" />
+                            </svg>
+                            <span>📸 Tomar Foto al Cuaderno</span>
+                          </button>
+                          <span style={{
+                            fontSize: '11px',
+                            color: '#ffffff',
+                            backgroundColor: 'rgba(0,0,0,0.6)',
+                            padding: '2px 8px',
+                            borderRadius: '4px',
+                          }}>
+                            Apunta tu cuaderno de forma iluminada y nítida
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                /* Modo Subir Archivo */
+                <div className="upload-dropzone" onClick={() => fileInputRef.current?.click()}>
+                  <input
+                    type="file"
+                    ref={fileInputRef}
+                    style={{ display: 'none' }}
+                    accept="image/*"
+                    onChange={handleFileChange}
+                  />
+                  {selectedImage ? (
+                    <div className="image-preview-box">
+                      <img src={selectedImage} alt="Foto seleccionada" className="preview-img" />
+                      <span className="change-img-text">Clic para cambiar de imagen</span>
+                    </div>
+                  ) : (
+                    <div className="dropzone-empty">
+                      <p className="dropzone-text">Haz clic para seleccionar la imagen del diagrama</p>
+                      <span className="dropzone-sub">Formatos compatibles: JPG, PNG, WEBP</span>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Configuración opcional de clave API */}
               <div className="api-key-accordion">
@@ -248,8 +568,8 @@ export const ImageScanModal: React.FC<ImageScanModalProps> = ({ isOpen, onClose 
                       <span className="compartment-label">Métodos:</span>
                       {cls.methods && cls.methods.length > 0 ? (
                         <ul className="preview-items-list">
-                          {cls.methods.map((meth, mIdx) => (
-                            <li key={mIdx}>{meth}</li>
+                          {cls.methods.map((method, mIdx) => (
+                            <li key={mIdx}>{method}</li>
                           ))}
                         </ul>
                       ) : (
@@ -260,34 +580,24 @@ export const ImageScanModal: React.FC<ImageScanModalProps> = ({ isOpen, onClose 
                 ))}
               </div>
 
-              {/* Lista de relaciones detectadas */}
-              {analysisResult.relations && analysisResult.relations.length > 0 && (
-                <>
-                  <div className="preview-section-title mt-3">Relaciones:</div>
+              {/* Relaciones detectadas */}
+              {analysisResult.relations.length > 0 && (
+                <div className="preview-relations-section">
+                  <div className="preview-section-title">Relaciones identificadas:</div>
                   <div className="preview-relations-list">
-                    {analysisResult.relations.map((rel, rIdx) => (
-                      <div key={rIdx} className="preview-relation-item">
-                        <span className="rel-class-name">{rel.source}</span>
-                        <span className="rel-type-tag">{translateRelationType(rel.type)}</span>
-                        <span className="rel-class-name">{rel.target}</span>
-                        {(rel.sourceMultiplicity || rel.targetMultiplicity) && (
-                          <span className="rel-multiplicity">
-                            ({rel.sourceMultiplicity || '1'} : {rel.targetMultiplicity || '1'})
-                          </span>
-                        )}
+                    {analysisResult.relations.map((rel, idx) => (
+                      <div key={idx} className="preview-relation-item">
+                        <span className="rel-class-source">{rel.source}</span>
+                        <span className="rel-cardinality">({rel.sourceMultiplicity || '1'})</span>
+                        <span className="rel-arrow">
+                          ──[{translateRelationType(rel.type)}
+                          {rel.label ? `: ${rel.label}` : ''}]──▶
+                        </span>
+                        <span className="rel-cardinality">({rel.targetMultiplicity || '1..*'})</span>
+                        <span className="rel-class-target">{rel.target}</span>
                       </div>
                     ))}
                   </div>
-                </>
-              )}
-
-              {/* Mensaje de confirmación de lienzo si ya tiene nodos */}
-              {hasExistingNodes && (
-                <div className="existing-canvas-notice">
-                  <span className="notice-title">El lienzo actual contiene elementos</span>
-                  <span className="notice-desc">
-                    Tienes {nodes.length} elemento(s) en el diagrama actual. Elige si deseas reemplazar el lienzo por completo o conservar las clases actuales y añadir las nuevas a un lado.
-                  </span>
                 </div>
               )}
             </div>
@@ -296,7 +606,7 @@ export const ImageScanModal: React.FC<ImageScanModalProps> = ({ isOpen, onClose 
 
         {/* Footer Actions */}
         <div className="modal-footer">
-          <button type="button" className="modal-cancel-btn" onClick={onClose}>
+          <button type="button" className="modal-cancel-btn" onClick={() => { stopCamera(); onClose(); }}>
             Cancelar
           </button>
 
@@ -313,7 +623,7 @@ export const ImageScanModal: React.FC<ImageScanModalProps> = ({ isOpen, onClose 
                   <span>Analizando dibujo...</span>
                 </>
               ) : (
-                <span>Analizar y Diseñar Diagrama</span>
+                <span>✨ Analizar y Diseñar Diagrama</span>
               )}
             </button>
           ) : (

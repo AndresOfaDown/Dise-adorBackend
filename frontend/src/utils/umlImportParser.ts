@@ -64,9 +64,11 @@ function getSafeAttr(el: Element, attrName: string): string {
       }
     }
   } else {
-    // Si no tiene dos puntos, probar prefijado con xmi: o xmi.
-    const prefixed = el.getAttribute('xmi:' + attrName) || el.getAttribute('xmi.' + attrName);
-    if (prefixed !== null && prefixed !== undefined && prefixed !== '') return prefixed;
+    // Si no tiene dos puntos, probar prefijado con xmi: o xmi. (EXCEPTO si attrName es 'type' para no confundir con xmi:type)
+    if (attrName.toLowerCase() !== 'type') {
+      const prefixed = el.getAttribute('xmi:' + attrName) || el.getAttribute('xmi.' + attrName);
+      if (prefixed !== null && prefixed !== undefined && prefixed !== '') return prefixed;
+    }
   }
 
   // 3. Búsqueda manual iterando attributes
@@ -77,6 +79,11 @@ function getSafeAttr(el: Element, attrName: string): string {
       const a = el.attributes[i];
       const nodeName = a.nodeName.toLowerCase();
       const localName = a.localName?.toLowerCase() || '';
+
+      // Si estamos buscando 'type' (tipo de dato), NO confundir con xmi:type (metaclase)
+      if (target === 'type' && (nodeName === 'xmi:type' || nodeName === 'xmi.type')) {
+        continue;
+      }
 
       if (nodeName === target || localName === target || nodeName.endsWith(':' + targetLocal) || localName === targetLocal) {
         if (a.value) return a.value;
@@ -100,34 +107,42 @@ function toVisibilitySymbol(vis: string = ''): string {
 
 /**
  * Limpia y normaliza tipos de Enterprise Architect y estándares UML
- * Ejemplo: "EAJava_boolean" -> "Boolean", "EAJava_Long_PK_" -> "Long"
+ * Ejemplo: "EAJava_int" -> "int", "EAJava_string" -> "string"
  */
 function cleanTypeName(raw: string): string {
-  if (!raw) return 'String';
+  if (!raw) return 'string';
   let cleaned = raw.trim();
 
-  // Si contiene URL o # (ej. path/to/types#Integer)
+  // Si contiene URL o # (ej. path/to/types#Integer o http://.../uml.xml#Integer)
   if (cleaned.includes('#')) {
     cleaned = cleaned.split('#').pop() || cleaned;
   }
 
+  // Si es un tipo metaclass XMI como uml:Property o uml:PrimitiveType o uml:Class
+  if (cleaned.toLowerCase().startsWith('uml:')) {
+    cleaned = cleaned.split(':').pop() || cleaned;
+    if (['property', 'class', 'primitivetype', 'operation', 'parameter'].includes(cleaned.toLowerCase())) {
+      return 'string';
+    }
+  }
+
   // Quitar prefijos propietarios de Enterprise Architect (EAJava_, EAC_, EA_, etc.)
-  cleaned = cleaned.replace(/^EA[A-Za-z0-9]+_/, '');
+  cleaned = cleaned.replace(/^EA[A-Za-z0-9]*_/, '');
   // Quitar sufijos comunes de llaves primarias/foráneas en EA (_PK_, _FK_)
   cleaned = cleaned.replace(/_(?:PK|FK)_?$/i, '');
 
-  // Normalizar nombres típicos
+  // Normalizar nombres típicos (coincidentes con los que usa Enterprise Architect y el canvas)
   const lower = cleaned.toLowerCase();
-  if (lower === 'integer' || lower === 'int') return 'Integer';
-  if (lower === 'string' || lower === 'varchar' || lower === 'text') return 'String';
-  if (lower === 'boolean' || lower === 'bool') return 'Boolean';
-  if (lower === 'double') return 'Double';
-  if (lower === 'float' || lower === 'real' || lower === 'decimal') return 'Float';
-  if (lower === 'date' || lower === 'datetime' || lower === 'timestamp') return 'Date';
-  if (lower === 'long') return 'Long';
+  if (lower === 'integer' || lower === 'int') return 'int';
+  if (lower === 'string' || lower === 'varchar' || lower === 'text' || lower === 'char') return 'string';
+  if (lower === 'boolean' || lower === 'bool') return 'boolean';
+  if (lower === 'double') return 'double';
+  if (lower === 'float' || lower === 'real' || lower === 'decimal' || lower === 'unlimitednatural') return 'float';
+  if (lower === 'date' || lower === 'datetime' || lower === 'timestamp' || lower === 'time') return 'date';
+  if (lower === 'long' || lower === 'bigint') return 'long';
   if (lower === 'void') return 'void';
 
-  return cleaned || 'String';
+  return cleaned || 'string';
 }
 
 /**
@@ -175,9 +190,40 @@ export function parseXmi(xmlText: string): ParsedUmlResult {
   // Mapeos de IDs internos a nombres de clase
   const idToName: Record<string, string> = {};
   const idToClass: Record<string, ParsedUmlClass> = {};
+  const primitiveTypeIdToName: Record<string, string> = {};
+  const eaAttributeTypes: Record<string, string> = {};
 
   // Obtener todos los elementos del árbol XML para búsqueda sin depender de selectores CSS con namespaces
   const allElements = Array.from(doc.getElementsByTagName('*'));
+
+  // 0. Pre-mapear IDs globales: Clases, Tipos Primitivos y Propiedades de Atributos EA
+  for (const el of allElements) {
+    const rawId = getSafeAttr(el, 'xmi:id') || getSafeAttr(el, 'id') || getSafeAttr(el, 'xmi:idref') || getSafeAttr(el, 'idref');
+    const name = getSafeAttr(el, 'name');
+    const tag = (el.localName || el.tagName).toLowerCase();
+    const xmiType = getSafeAttr(el, 'xmi:type').toLowerCase();
+
+    if (rawId && name) {
+      idToName[rawId] = name;
+    }
+
+    if (xmiType === 'uml:primitivetype' || tag === 'primitivetype' || tag.endsWith(':primitivetype')) {
+      if (rawId && name) {
+        primitiveTypeIdToName[rawId] = name;
+      }
+    }
+
+    // Atributos en extensiones de Enterprise Architect (<attributes><attribute xmi:idref="..."><properties type="..."/></attribute>)
+    if (tag === 'attribute') {
+      const propEl = el.querySelector('properties');
+      if (rawId && propEl) {
+        const propType = getSafeAttr(propEl, 'type');
+        if (propType) {
+          eaAttributeTypes[rawId] = propType;
+        }
+      }
+    }
+  }
 
   // 1. Intentar detectar paquete
   let packageName = 'com.example.uml';
@@ -271,34 +317,61 @@ export function parseXmi(xmlText: string): ParsedUmlResult {
         const attrName = getSafeAttr(child, 'name');
         if (!attrName) continue;
 
+        // Si este ownedAttribute es en realidad un extremo de asociación navegable en EA/XMI, ignorarlo como campo
+        if (getSafeAttr(child, 'association')) {
+          continue;
+        }
+
+        const rawAttrId = getSafeAttr(child, 'xmi:id') || getSafeAttr(child, 'id') || getSafeAttr(child, 'xmi:idref') || getSafeAttr(child, 'idref');
         const vis = toVisibilitySymbol(getSafeAttr(child, 'visibility'));
         let typeName = '';
 
-        // 1. Atributo directo type="Nombre"
-        const directType = getSafeAttr(child, 'type');
-        if (directType && !directType.startsWith('EAID_')) {
-          typeName = cleanTypeName(directType);
+        // 1. Verificar si EA guardó el tipo en su extensión de atributos (<properties type="string"/>)
+        if (rawAttrId && eaAttributeTypes[rawAttrId]) {
+          typeName = cleanTypeName(eaAttributeTypes[rawAttrId]);
         }
 
-        // 2. Elemento hijo <type ...> (Enterprise Architect usa <type xmi:idref="EAJava_boolean"/>)
+        // 2. Elemento hijo <type ...> (estándar UML 2.1 / EA: <type xmi:idref="EAJava_int"/> o <type href="...#Integer"/>)
         if (!typeName) {
-          const typeTags = Array.from(child.getElementsByTagName('*')).filter((t) => {
+          const typeTags = Array.from(child.children).filter((t) => {
             const tn = (t.localName || t.tagName).toLowerCase();
             return tn === 'type' || tn.endsWith(':type');
           });
           if (typeTags.length > 0) {
             const tEl = typeTags[0];
-            const idref = getSafeAttr(tEl, 'xmi:idref') || getSafeAttr(tEl, 'idref') || getSafeAttr(tEl, 'name');
+            const idref = getSafeAttr(tEl, 'xmi:idref') || getSafeAttr(tEl, 'idref') || tEl.getAttribute('idref') || tEl.getAttribute('name');
             if (idref) {
-              typeName = cleanTypeName(idref);
+              if (primitiveTypeIdToName[idref]) {
+                typeName = cleanTypeName(primitiveTypeIdToName[idref]);
+              } else if (idToName[idref]) {
+                typeName = idToName[idref];
+              } else {
+                typeName = cleanTypeName(idref);
+              }
             } else {
-              const href = getSafeAttr(tEl, 'href');
+              const href = getSafeAttr(tEl, 'href') || tEl.getAttribute('href');
               if (href) typeName = cleanTypeName(href);
             }
           }
         }
 
-        if (!typeName) typeName = 'String';
+        // 3. Atributo directo type="int" (IMPORTANTE: usar child.getAttribute('type') directo, NUNCA getSafeAttr que devuelve xmi:type="uml:Property"!)
+        if (!typeName) {
+          const directType = child.getAttribute('type');
+          if (directType && !directType.startsWith('EAID_') && !directType.toLowerCase().startsWith('uml:')) {
+            if (primitiveTypeIdToName[directType]) {
+              typeName = cleanTypeName(primitiveTypeIdToName[directType]);
+            } else if (idToName[directType]) {
+              typeName = idToName[directType];
+            } else {
+              typeName = cleanTypeName(directType);
+            }
+          }
+        }
+
+        if (!typeName || typeName.toLowerCase() === 'uml' || typeName.toLowerCase().startsWith('uml:')) {
+          typeName = 'string';
+        }
 
         attributes.push(`${vis} ${attrName}: ${typeName}`);
       }
@@ -329,22 +402,37 @@ export function parseXmi(xmlText: string): ParsedUmlResult {
           const pName = getSafeAttr(pEl, 'name');
 
           let pType = '';
-          const directPType = getSafeAttr(pEl, 'type');
-          if (directPType && !directPType.startsWith('EAID_')) {
-            pType = cleanTypeName(directPType);
-          }
-          if (!pType) {
-            const pTypeTags = Array.from(pEl.getElementsByTagName('*')).filter((t) => {
-              const tn = (t.localName || t.tagName).toLowerCase();
-              return tn === 'type' || tn.endsWith(':type');
-            });
-            if (pTypeTags.length > 0) {
-              const ptEl = pTypeTags[0];
-              const idref = getSafeAttr(ptEl, 'xmi:idref') || getSafeAttr(ptEl, 'idref') || getSafeAttr(ptEl, 'name');
-              if (idref) pType = cleanTypeName(idref);
+          const typeTags = Array.from(pEl.children).filter((t) => {
+            const tn = (t.localName || t.tagName).toLowerCase();
+            return tn === 'type' || tn.endsWith(':type');
+          });
+          if (typeTags.length > 0) {
+            const ptEl = typeTags[0];
+            const idref = getSafeAttr(ptEl, 'xmi:idref') || getSafeAttr(ptEl, 'idref') || ptEl.getAttribute('idref') || ptEl.getAttribute('name');
+            if (idref) {
+              if (primitiveTypeIdToName[idref]) {
+                pType = cleanTypeName(primitiveTypeIdToName[idref]);
+              } else if (idToName[idref]) {
+                pType = idToName[idref];
+              } else {
+                pType = cleanTypeName(idref);
+              }
+            } else {
+              const href = getSafeAttr(ptEl, 'href') || ptEl.getAttribute('href');
+              if (href) pType = cleanTypeName(href);
             }
           }
-          if (!pType) pType = 'String';
+
+          if (!pType) {
+            const directPType = pEl.getAttribute('type');
+            if (directPType && !directPType.startsWith('EAID_') && !directPType.toLowerCase().startsWith('uml:')) {
+              pType = cleanTypeName(directPType);
+            }
+          }
+
+          if (!pType || pType.toLowerCase() === 'uml' || pType.toLowerCase().startsWith('uml:')) {
+            pType = 'string';
+          }
 
           if (direction === 'return') {
             returnType = pType || 'void';
@@ -401,6 +489,7 @@ export function parseXmi(xmlText: string): ParsedUmlResult {
       const sourceEl = el.querySelector('source');
       const targetEl = el.querySelector('target');
       const propEl = el.querySelector('properties');
+      const labelsEl = el.querySelector('labels');
 
       const sourceId = sourceEl ? (getSafeAttr(sourceEl, 'xmi:idref') || getSafeAttr(sourceEl, 'idref')) : '';
       const targetId = targetEl ? (getSafeAttr(targetEl, 'xmi:idref') || getSafeAttr(targetEl, 'idref')) : '';
@@ -415,11 +504,16 @@ export function parseXmi(xmlText: string): ParsedUmlResult {
         const sourceTypeEl = sourceEl?.querySelector('type');
         const targetTypeEl = targetEl?.querySelector('type');
 
-        const mult1 = sourceTypeEl ? (getSafeAttr(sourceTypeEl, 'multiplicity') || '') : '';
-        const mult2 = targetTypeEl ? (getSafeAttr(targetTypeEl, 'multiplicity') || '') : '';
+        let mult1 = sourceTypeEl ? (getSafeAttr(sourceTypeEl, 'multiplicity') || '') : '';
+        let mult2 = targetTypeEl ? (getSafeAttr(targetTypeEl, 'multiplicity') || '') : '';
+
+        // Si la multiplicidad no está en <type>, buscar en <labels lb="..." rb="...">
+        if (!mult1 && labelsEl) mult1 = getSafeAttr(labelsEl, 'lb');
+        if (!mult2 && labelsEl) mult2 = getSafeAttr(labelsEl, 'rb');
 
         const agg1 = sourceTypeEl ? getSafeAttr(sourceTypeEl, 'aggregation') : 'none';
         const agg2 = targetTypeEl ? getSafeAttr(targetTypeEl, 'aggregation') : 'none';
+        const subtype = propEl ? getSafeAttr(propEl, 'subtype') : '';
 
         let relType: UmlRelationType = 'association';
         if (eaType === 'Generalization') {
@@ -428,24 +522,43 @@ export function parseXmi(xmlText: string): ParsedUmlResult {
           relType = 'dependency';
         } else if (eaType === 'AssociationClass') {
           relType = 'associationClass';
-        } else if (agg2 === 'composite' || agg1 === 'composite') {
+        } else if (agg2 === 'composite' || agg1 === 'composite' || subtype === 'Strong') {
           relType = 'composition';
-        } else if (agg2 === 'shared' || agg1 === 'shared') {
+        } else if (agg2 === 'shared' || agg1 === 'shared' || subtype === 'Weak') {
           relType = 'aggregation';
+        }
+
+        let finalSource = sourceName;
+        let finalTarget = targetName;
+        let finalSourceMult = mult1;
+        let finalTargetMult = mult2;
+
+        // En UML y en nuestro lienzo (UmlEdge), el diamante (markerStart) se dibuja en el nodo SOURCE.
+        // Si en EA el extremo con agregación/composición es el TARGET, invertimos source y target
+        // para que el diamante y su multiplicidad queden en la clase contenedor (el "todo").
+        if (relType === 'composition' || relType === 'aggregation') {
+          if (agg2 === 'composite' || agg2 === 'shared') {
+            finalSource = targetName;
+            finalTarget = sourceName;
+            finalSourceMult = mult2;
+            finalTargetMult = mult1;
+          }
         }
 
         // Evitar duplicados
         const alreadyExists = relations.some(
-          (r) => r.source === sourceName && r.target === targetName && r.type === relType
+          (r) =>
+            (r.source === finalSource && r.target === finalTarget && r.type === relType) ||
+            (r.source === finalTarget && r.target === finalSource && r.type === relType)
         );
 
         if (!alreadyExists) {
           relations.push({
-            source: sourceName,
-            target: targetName,
+            source: finalSource,
+            target: finalTarget,
             type: relType,
-            sourceMultiplicity: mult1,
-            targetMultiplicity: mult2,
+            sourceMultiplicity: finalSourceMult,
+            targetMultiplicity: finalTargetMult,
             label,
           });
         }
@@ -497,20 +610,36 @@ export function parseXmi(xmlText: string): ParsedUmlResult {
             relType = 'aggregation';
           }
 
+          let finalSource = sourceName;
+          let finalTarget = targetName;
+          let finalSourceMult = mult1;
+          let finalTargetMult = mult2;
+
+          if (relType === 'composition' || relType === 'aggregation') {
+            if (agg2 === 'composite' || agg2 === 'shared') {
+              finalSource = targetName;
+              finalTarget = sourceName;
+              finalSourceMult = mult2;
+              finalTargetMult = mult1;
+            }
+          }
+
           const intermediateClassName = isAssocClass ? idToName[assocId] : undefined;
 
           // Verificar si ya fue agregada por conectores EA
           const alreadyExists = relations.some(
-            (r) => r.source === sourceName && r.target === targetName && r.type === relType
+            (r) =>
+              (r.source === finalSource && r.target === finalTarget && r.type === relType) ||
+              (r.source === finalTarget && r.target === finalSource && r.type === relType)
           );
 
           if (!alreadyExists) {
             relations.push({
-              source: sourceName,
-              target: targetName,
+              source: finalSource,
+              target: finalTarget,
               type: relType,
-              sourceMultiplicity: mult1,
-              targetMultiplicity: mult2,
+              sourceMultiplicity: finalSourceMult,
+              targetMultiplicity: finalTargetMult,
               label,
               associationClassName: intermediateClassName,
             });
@@ -533,7 +662,9 @@ export function parseXmi(xmlText: string): ParsedUmlResult {
 
       if (sourceName && targetName) {
         const alreadyExists = relations.some(
-          (r) => r.source === sourceName && r.target === targetName && r.type === 'dependency'
+          (r) =>
+            (r.source === sourceName && r.target === targetName && r.type === 'dependency') ||
+            (r.source === targetName && r.target === sourceName && r.type === 'dependency')
         );
         if (!alreadyExists) {
           relations.push({
@@ -685,31 +816,49 @@ export function parsePlantUml(pumlText: string): ParsedUmlResult {
       // rightName hereda de leftName: Target <|-- Source
       source = rightName;
       target = leftName;
+      sourceMultiplicity = multRight;
+      targetMultiplicity = multLeft;
       type = 'generalization';
     } else if (arrow.includes('--|>')) {
       // leftName hereda de rightName: Source --|> Target
       source = leftName;
       target = rightName;
+      sourceMultiplicity = multLeft;
+      targetMultiplicity = multRight;
       type = 'generalization';
     } else if (arrow.includes('*--')) {
-      // Composición: left posee a right
+      // Composición: left posee a right (diamante en left = source)
       type = 'composition';
+      sourceMultiplicity = multLeft;
+      targetMultiplicity = multRight;
     } else if (arrow.includes('--*')) {
+      // Composición: right posee a left (diamante en right = source)
       source = rightName;
       target = leftName;
+      sourceMultiplicity = multRight;
+      targetMultiplicity = multLeft;
       type = 'composition';
     } else if (arrow.includes('o--')) {
-      // Agregación: left contiene a right
+      // Agregación: left contiene a right (diamante en left = source)
       type = 'aggregation';
+      sourceMultiplicity = multLeft;
+      targetMultiplicity = multRight;
     } else if (arrow.includes('--o')) {
+      // Agregación: right contiene a left (diamante en right = source)
       source = rightName;
       target = leftName;
+      sourceMultiplicity = multRight;
+      targetMultiplicity = multLeft;
       type = 'aggregation';
     } else if (arrow.includes('..>')) {
       type = 'dependency';
+      sourceMultiplicity = multLeft;
+      targetMultiplicity = multRight;
     } else if (arrow.includes('<..')) {
       source = rightName;
       target = leftName;
+      sourceMultiplicity = multRight;
+      targetMultiplicity = multLeft;
       type = 'dependency';
     } else {
       type = 'association';
