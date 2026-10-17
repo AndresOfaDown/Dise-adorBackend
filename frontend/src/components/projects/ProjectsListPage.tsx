@@ -138,7 +138,7 @@ export const ProjectsListPage: React.FC = () => {
             <span>Dashboard</span>
           </button>
           <div className="editor-brand-divider"></div>
-          <span className="brand-name">Gestión de Proyectos (CU01)</span>
+          <span className="brand-name">Gestión de Proyectos</span>
         </div>
 
         <div className="dash-user-bar">
@@ -164,7 +164,7 @@ export const ProjectsListPage: React.FC = () => {
       <main className="projects-page-main">
         <div className="projects-hero-bar">
           <div>
-            <span className="projects-hero-tag">CU01: Gestionar Proyecto</span>
+            <span className="projects-hero-tag">Gestionar Proyecto</span>
             <h1 className="projects-hero-title">Mis Proyectos de Diseño de Software</h1>
             <p className="projects-hero-desc">
               Crea nuevos proyectos con nombres personalizados, colabora en tiempo real con otros usuarios y continúa diseñando en cualquier momento.
