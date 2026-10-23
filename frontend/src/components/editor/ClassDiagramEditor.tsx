@@ -33,16 +33,19 @@ const edgeTypes: EdgeTypes = {
   umlEdge: UmlEdge,
 };
 
-const EditorCanvas: React.FC = () => {
+interface EditorCanvasProps {
+  socket: ReturnType<typeof useDiagramSocket>;
+}
+
+const EditorCanvas: React.FC<EditorCanvasProps> = ({ socket }) => {
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
   const { project } = useReactFlow();
-  const { activeProjectId } = useNavigationStore();
 
   const {
     remoteCursors,
     broadcastDiagramChange,
     broadcastCursor,
-  } = useDiagramSocket(activeProjectId);
+  } = socket;
 
   const {
     nodes,
@@ -173,7 +176,7 @@ const EditorCanvas: React.FC = () => {
     });
   }, []);
 
-  // Clic derecho en un nodo (especialmente texto)
+  // Clic derecho en un nodo de texto
   const onNodeContextMenu = useCallback((event: React.MouseEvent, node: any) => {
     if (node.type === 'umlText') {
       event.preventDefault();
@@ -186,14 +189,15 @@ const EditorCanvas: React.FC = () => {
     }
   }, []);
 
-  // Eliminar relación desde menú contextual
   const handleDeleteEdgeFromContext = (edgeId: string) => {
-    onEdgesChange([{ id: edgeId, type: 'remove' }]);
+    useDiagramStore.setState((state) => ({
+      edges: state.edges.filter((e) => e.id !== edgeId),
+      hasUnsavedChanges: true,
+    }));
     setContextMenu(null);
     toast.success('Relación eliminada');
   };
 
-  // Eliminar texto desde menú contextual
   const handleDeleteNodeFromContext = (nodeId: string) => {
     deleteNode(nodeId);
     setNodeContextMenu(null);
@@ -230,8 +234,7 @@ const EditorCanvas: React.FC = () => {
     [edges, onEdgesChange]
   );
 
-  // Al mover cualquier clase, distribuir dinámicamente los handles
-  // para que múltiples relaciones nunca converjan en el mismo punto ni compartan flecha
+  // Al arrastrar nodos, recalcular los puntos de anclaje de las relaciones para que no se crucen
   const onNodeDrag = useCallback(() => {
     const currentNodes = useDiagramStore.getState().nodes;
     const currentEdges = useDiagramStore.getState().edges;
@@ -356,16 +359,14 @@ const EditorCanvas: React.FC = () => {
         fitViewOptions={{ padding: 0.2 }}
         minZoom={0.2}
         maxZoom={2.5}
-        // Desplazamiento arriba/abajo con rueda del ratón (sin hacer zoom completo)
         panOnScroll={true}
         panOnScrollSpeed={1.2}
         zoomOnScroll={false}
         zoomOnPinch={true}
-        // Configuración para arrastre individual y libre de clases
-        panOnDrag={[1, 2]} // Clic derecho o rueda para mover el lienzo
-        selectionOnDrag={false} // Evita multi-selección accidental al arrastrar
+        panOnDrag={[1, 2]}
+        selectionOnDrag={false}
         selectNodesOnDrag={false}
-        nodesDraggable={true} // Permite mover la clase libremente a cualquier lado
+        nodesDraggable={true}
         elementsSelectable={true}
         connectionRadius={35}
         connectionLineStyle={{ stroke: '#000000', strokeWidth: 1.8 }}
@@ -392,7 +393,6 @@ const EditorCanvas: React.FC = () => {
             zIndex: 1000,
           }}
         >
-          {/* Línea elástica azul */}
           <line
             x1={sourceCenter.x}
             y1={sourceCenter.y}
@@ -401,8 +401,6 @@ const EditorCanvas: React.FC = () => {
             stroke="#3b82f6"
             strokeWidth="1.8"
           />
-
-          {/* Círculo azul en el centro de la clase origen */}
           <circle
             cx={sourceCenter.x}
             cy={sourceCenter.y}
@@ -411,8 +409,6 @@ const EditorCanvas: React.FC = () => {
             stroke="#2563eb"
             strokeWidth="2"
           />
-
-          {/* Círculo azul en el extremo de la línea (o centro de la clase destino) */}
           <circle
             cx={rubberEndX}
             cy={rubberEndY}
@@ -478,6 +474,9 @@ export const ClassDiagramEditor: React.FC = () => {
   const { loadProjectDiagram, isLoading, nodes } = useDiagramStore();
   const [isAiPanelOpen, setIsAiPanelOpen] = useState(false);
 
+  // Instancia única y compartida del WebSocket
+  const diagramSocket = useDiagramSocket(activeProjectId);
+
   // Activación del auto-guardado inteligente (debounce de 1500ms)
   useAutoSave(1500);
 
@@ -507,11 +506,17 @@ export const ClassDiagramEditor: React.FC = () => {
       <div className={`editor-body-layout ${isAiPanelOpen ? 'ai-panel-open' : ''}`}>
         <ToolSidebar />
         <ReactFlowProvider>
-          <EditorCanvas />
+          <EditorCanvas socket={diagramSocket} />
         </ReactFlowProvider>
         <AiAssistantPanel
           isOpen={isAiPanelOpen}
           onClose={() => setIsAiPanelOpen(false)}
+          teamMessages={diagramSocket.teamMessages}
+          setTeamMessages={diagramSocket.setTeamMessages}
+          isAiTyping={diagramSocket.isAiTyping}
+          aiTypingFor={diagramSocket.aiTypingFor}
+          onSendTeamMessage={diagramSocket.sendTeamAiMessage}
+          projectId={activeProjectId}
         />
       </div>
     </div>

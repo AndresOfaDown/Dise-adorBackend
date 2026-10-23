@@ -18,6 +18,16 @@ export interface RemoteCursor {
   lastUpdated: number;
 }
 
+export interface TeamAiMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  senderName: string;
+  senderColor: string;
+  text: string;
+  actions?: any[];
+  timestamp?: string;
+}
+
 const COLLAB_COLORS = ['#2563eb', '#7c3aed', '#db2777', '#ea580c', '#16a34a', '#0891b2', '#d97706'];
 
 export function useDiagramSocket(projectId: number | null) {
@@ -25,6 +35,11 @@ export function useDiagramSocket(projectId: number | null) {
   const [isConnected, setIsConnected] = useState(false);
   const [collaborators, setCollaborators] = useState<Collaborator[]>([]);
   const [remoteCursors, setRemoteCursors] = useState<Record<string, RemoteCursor>>({});
+  
+  // CU-11: Estado colaborativo de la IA Senior
+  const [teamMessages, setTeamMessages] = useState<TeamAiMessage[]>([]);
+  const [isAiTyping, setIsAiTyping] = useState<boolean>(false);
+  const [aiTypingFor, setAiTypingFor] = useState<string | null>(null);
 
   const socketRef = useRef<WebSocket | null>(null);
   const clientIdRef = useRef<string>(`client_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`);
@@ -43,6 +58,7 @@ export function useDiagramSocket(projectId: number | null) {
       setIsConnected(false);
       setCollaborators([]);
       setRemoteCursors({});
+      setTeamMessages([]);
       return;
     }
 
@@ -50,7 +66,6 @@ export function useDiagramSocket(projectId: number | null) {
 
     const connectSocket = () => {
       const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      // Si el frontend está corriendo en el puerto 5173 (Vite) o en entorno local/LAN, el backend Django Channels está en el puerto 8000
       let wsHost = window.location.host;
       if (
         window.location.port === '5173' ||
@@ -89,12 +104,46 @@ export function useDiagramSocket(projectId: number | null) {
             return;
           }
 
-          // Ignorar ecos propios
+          // 2. CU-11: Indicador de escritura de la IA Senior
+          if (payload.type === 'team_ai_typing') {
+            setIsAiTyping(!!payload.isTyping);
+            setAiTypingFor(payload.isTyping ? payload.forUser || null : null);
+            return;
+          }
+
+          // 3. CU-11: Mensaje del equipo o respuesta de la IA Senior
+          if (payload.type === 'team_ai_message') {
+            const newMsg: TeamAiMessage = {
+              id: payload.id || `msg_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+              role: payload.role || 'user',
+              senderName: payload.senderName || 'Colaborador',
+              senderColor: payload.senderColor || '#2563eb',
+              text: payload.text || '',
+              actions: payload.actions || [],
+              timestamp: payload.timestamp || new Date().toISOString()
+            };
+
+            setTeamMessages((prev) => {
+              // Evitar duplicados por id
+              if (prev.some((m) => m.id === newMsg.id)) return prev;
+              return [...prev, newMsg];
+            });
+
+            // Si es respuesta de la IA con acciones, se despachan automáticamente en el canvas
+            if (payload.role === 'assistant' && payload.actions && payload.actions.length > 0) {
+              window.dispatchEvent(
+                new CustomEvent('apply_ai_actions', { detail: payload.actions })
+              );
+            }
+            return;
+          }
+
+          // Ignorar ecos propios para eventos de cursor y diagrama
           if (payload.senderId === clientIdRef.current) {
             return;
           }
 
-          // 2. Movimiento de Cursor remoto
+          // 4. Movimiento de Cursor remoto
           if (payload.type === 'cursor_move') {
             setRemoteCursors((prev) => ({
               ...prev,
@@ -110,7 +159,7 @@ export function useDiagramSocket(projectId: number | null) {
             return;
           }
 
-          // 3. Actualización de Diagrama (Clases, Métodos, Atributos, Relaciones)
+          // 5. Actualización de Diagrama (Clases, Métodos, Atributos, Relaciones)
           if (payload.type === 'diagram_update') {
             isSelfUpdateRef.current = true;
             useDiagramStore.setState({
@@ -124,7 +173,7 @@ export function useDiagramSocket(projectId: number | null) {
             return;
           }
 
-          // 4. Renombrado de Proyecto en vivo
+          // 6. Renombrado de Proyecto en vivo
           if (payload.type === 'project_rename') {
             if (payload.name) {
               useDiagramStore.setState({ projectName: payload.name });
@@ -140,7 +189,6 @@ export function useDiagramSocket(projectId: number | null) {
         if (!isMounted) return;
         setIsConnected(false);
         useDiagramStore.getState().setIsSocketConnected(false);
-        // Reconectar tras 3 segundos
         reconnectTimeoutRef.current = setTimeout(() => {
           if (isMounted) connectSocket();
         }, 3000);
@@ -153,7 +201,6 @@ export function useDiagramSocket(projectId: number | null) {
 
     connectSocket();
 
-    // Limpieza de cursores inactivos cada 4 segundos
     const cleanupInterval = setInterval(() => {
       const now = Date.now();
       setRemoteCursors((prev) => {
@@ -205,12 +252,11 @@ export function useDiagramSocket(projectId: number | null) {
     [username]
   );
 
-  // Transmitir posición del cursor flotante (coordenadas en el lienzo de ReactFlow)
+  // Transmitir posición del cursor flotante
   const lastCursorSendRef = useRef<number>(0);
   const broadcastCursor = useCallback(
     (flowX: number, flowY: number) => {
       const now = Date.now();
-      // Throttle a 40ms (~25 fps) para no saturar el canal
       if (now - lastCursorSendRef.current < 40) return;
       lastCursorSendRef.current = now;
 
@@ -246,6 +292,29 @@ export function useDiagramSocket(projectId: number | null) {
     [username]
   );
 
+  // CU-11: Enviar mensaje colaborativo al canal compartido con la IA Senior
+  const sendTeamAiMessage = useCallback(
+    (message: string, diagramContext: any) => {
+      if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
+        return false;
+      }
+
+      socketRef.current.send(
+        JSON.stringify({
+          type: 'team_ai_message',
+          senderId: clientIdRef.current,
+          senderName: username,
+          senderColor: userColorRef.current,
+          message,
+          diagramContext,
+          timestamp: new Date().toISOString()
+        })
+      );
+      return true;
+    },
+    [username]
+  );
+
   return {
     isConnected,
     collaborators,
@@ -253,6 +322,12 @@ export function useDiagramSocket(projectId: number | null) {
     broadcastDiagramChange,
     broadcastCursor,
     broadcastRename,
+    // CU-11 Exports
+    teamMessages,
+    setTeamMessages,
+    isAiTyping,
+    aiTypingFor,
+    sendTeamAiMessage,
     myClientId: clientIdRef.current,
     myColor: userColorRef.current,
   };

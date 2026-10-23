@@ -2,32 +2,37 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import toast from 'react-hot-toast';
 import { apiClient } from '../../api/client';
 import { useDiagramStore } from '../../store/diagramStore';
-import type { UmlRelationType } from '../../store/diagramStore';
+import { useAuthStore } from '../../store/authStore';
+import type { TeamAiMessage } from '../../hooks/useDiagramSocket';
 
-// Tipado del SpeechRecognition del navegador
 interface SpeechRecognitionEvent {
   results: { [index: number]: { [index: number]: { transcript: string } } };
   resultIndex: number;
 }
 
-interface ChatMessage {
-  id: string;
-  role: 'user' | 'assistant';
-  text: string;
-  actions?: any[];
-  actionsApplied?: boolean;
-  timestamp: Date;
-}
-
 interface AiAssistantPanelProps {
   isOpen: boolean;
   onClose: () => void;
+  teamMessages: TeamAiMessage[];
+  setTeamMessages: React.Dispatch<React.SetStateAction<TeamAiMessage[]>>;
+  isAiTyping: boolean;
+  aiTypingFor: string | null;
+  onSendTeamMessage: (message: string, diagramContext: any) => boolean;
+  projectId: number | null;
 }
 
-export const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ isOpen, onClose }) => {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+export const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({
+  isOpen,
+  onClose,
+  teamMessages,
+  setTeamMessages,
+  isAiTyping,
+  aiTypingFor,
+  onSendTeamMessage,
+  projectId
+}) => {
+  const { user } = useAuthStore();
   const [inputText, setInputText] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -41,10 +46,36 @@ export const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ isOpen, onCl
     deleteNode,
   } = useDiagramStore();
 
+  const currentUsername = user?.username || user?.nombre || user?.email?.split('@')[0] || 'Tú';
+
+  // Cargar historial previo de la base de datos al abrir el panel por primera vez
+  useEffect(() => {
+    if (projectId && teamMessages.length === 0) {
+      apiClient.get(`/api/ia/historial/${projectId}/`)
+        .then((res) => {
+          if (res.data?.success && Array.isArray(res.data.messages)) {
+            const mapped = res.data.messages.map((m: any) => ({
+              id: `msg_db_${m.id}`,
+              role: m.role,
+              senderName: m.sender_name || 'Colaborador',
+              senderColor: m.sender_color || '#2563eb',
+              text: m.text,
+              actions: m.actions,
+              timestamp: m.created_at
+            }));
+            setTeamMessages(mapped);
+          }
+        })
+        .catch((err) => {
+          console.warn("No se pudo cargar historial de sala previo:", err);
+        });
+    }
+  }, [projectId]);
+
   // Scroll automático al último mensaje
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  }, [teamMessages, isAiTyping]);
 
   // Focus en el input cuando se abre el panel
   useEffect(() => {
@@ -64,6 +95,7 @@ export const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ isOpen, onCl
       methods: (n.data?.methods || []).map(
         (m: any) => `${m.visibility} ${m.name}(${m.parameters || ''}): ${m.returnType || 'void'}`
       ),
+      position: n.position || { x: 100, y: 100 }
     }));
 
     const relations = edges.map((e) => {
@@ -109,7 +141,7 @@ export const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ isOpen, onCl
           addEdgeActions.push({
             source: action.data.source,
             target: action.data.target,
-            type: (action.data.type || 'association') as UmlRelationType,
+            type: action.data.type || 'association',
             sourceMultiplicity: action.data.sourceMultiplicity || '',
             targetMultiplicity: action.data.targetMultiplicity || '',
             label: action.data.label || '',
@@ -131,34 +163,40 @@ export const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ isOpen, onCl
           );
 
           if (sourceNode && targetNode) {
-            const edge = state.edges.find(
+            const edgeIndex = state.edges.findIndex(
               (e) =>
                 (e.source === sourceNode.id && e.target === targetNode.id) ||
                 (e.source === targetNode.id && e.target === sourceNode.id)
             );
 
-            if (edge) {
-              const isReverse = edge.source === targetNode.id;
-              const normSource = (action.data.sourceMultiplicity || '').replace(/\.{2,}/g, '..').trim();
-              const normTarget = (action.data.targetMultiplicity || '').replace(/\.{2,}/g, '..').trim();
+            if (edgeIndex !== -1) {
+              const currentEdge = state.edges[edgeIndex];
+              const isReverse = currentEdge.source === targetNode.id;
+              const updatedEdges = [...state.edges];
 
-              const partialData: any = {};
-              if (action.data.newType) partialData.relationType = action.data.newType;
-              if (action.data.sourceMultiplicity !== undefined) {
-                partialData.sourceMultiplicity = isReverse ? normTarget : normSource;
-              }
-              if (action.data.targetMultiplicity !== undefined) {
-                partialData.targetMultiplicity = isReverse ? normSource : normTarget;
-              }
-              if (action.data.label !== undefined) partialData.label = action.data.label;
+              const newSourceMult = isReverse
+                ? (action.data.targetMultiplicity ?? currentEdge.data?.sourceMultiplicity)
+                : (action.data.sourceMultiplicity ?? currentEdge.data?.sourceMultiplicity);
+              const newTargetMult = isReverse
+                ? (action.data.sourceMultiplicity ?? currentEdge.data?.targetMultiplicity)
+                : (action.data.targetMultiplicity ?? currentEdge.data?.targetMultiplicity);
 
-              useDiagramStore.getState().updateEdgeData(edge.id, partialData);
+              updatedEdges[edgeIndex] = {
+                ...currentEdge,
+                data: {
+                  ...currentEdge.data,
+                  relationType: action.data.newType || currentEdge.data?.relationType || 'association',
+                  sourceMultiplicity: newSourceMult ?? '',
+                  targetMultiplicity: newTargetMult ?? '',
+                  label: action.data.label !== undefined ? action.data.label : (currentEdge.data?.label || ''),
+                },
+              };
+
+              useDiagramStore.setState({ edges: updatedEdges, hasUnsavedChanges: true });
               toast.success(`Relación entre "${sourceName}" y "${targetName}" actualizada`);
             } else {
-              toast.error(`No se encontró una relación entre "${sourceName}" y "${targetName}"`);
+              toast.error(`No se encontró la relación entre "${sourceName}" y "${targetName}"`);
             }
-          } else {
-            toast.error(`No se encontraron las clases "${sourceName}" o "${targetName}"`);
           }
           break;
         }
@@ -170,11 +208,9 @@ export const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ isOpen, onCl
           );
 
           if (existingNode) {
-            const currentData = existingNode.data;
-            let updatedAttributes = [...(currentData.attributes || [])];
-            let updatedMethods = [...(currentData.methods || [])];
+            let updatedAttributes = [...(existingNode.data?.attributes || [])];
+            let updatedMethods = [...(existingNode.data?.methods || [])];
 
-            // Agregar nuevos atributos
             if (action.data.addAttributes) {
               for (const attrStr of action.data.addAttributes) {
                 let visibility: '+' | '-' | '#' | '~' = '+';
@@ -193,14 +229,12 @@ export const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ isOpen, onCl
               }
             }
 
-            // Eliminar atributos
             if (action.data.removeAttributes) {
               updatedAttributes = updatedAttributes.filter(
                 (a: any) => !action.data.removeAttributes.includes(a.name)
               );
             }
 
-            // Agregar nuevos métodos
             if (action.data.addMethods) {
               for (const methStr of action.data.addMethods) {
                 let visibility: '+' | '-' | '#' | '~' = '+';
@@ -219,7 +253,6 @@ export const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ isOpen, onCl
               }
             }
 
-            // Eliminar métodos
             if (action.data.removeMethods) {
               updatedMethods = updatedMethods.filter(
                 (m: any) => !action.data.removeMethods.includes(m.name)
@@ -251,8 +284,6 @@ export const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ isOpen, onCl
           if (nodeToDelete) {
             deleteNode(nodeToDelete.id);
             toast.success(`Clase "${targetName}" eliminada`);
-          } else {
-            toast.error(`No se encontró la clase "${targetName}" para eliminar`);
           }
           break;
         }
@@ -262,7 +293,6 @@ export const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ isOpen, onCl
           const targetName = action.data.target;
           const state = useDiagramStore.getState();
 
-          // Buscar los IDs de los nodos por nombre
           const sourceNode = state.nodes.find(
             (n) => n.type === 'umlClass' && n.data?.name?.toLowerCase() === sourceName?.toLowerCase()
           );
@@ -271,7 +301,6 @@ export const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ isOpen, onCl
           );
 
           if (sourceNode && targetNode) {
-            // Buscar la relación entre ambos nodos (en cualquier dirección)
             const edgeToDelete = state.edges.find(
               (e) =>
                 (e.source === sourceNode.id && e.target === targetNode.id) ||
@@ -284,101 +313,72 @@ export const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ isOpen, onCl
                 hasUnsavedChanges: true,
               });
               toast.success(`Relación entre "${sourceName}" y "${targetName}" eliminada`);
-            } else {
-              toast.error(`No se encontró una relación entre "${sourceName}" y "${targetName}"`);
             }
-          } else {
-            toast.error(`No se encontraron las clases "${sourceName}" o "${targetName}"`);
           }
           break;
         }
       }
     }
 
-    // Aplicar addNode y addEdge en lote usando importDiagramFromAi
     if (addNodeActions.length > 0 || addEdgeActions.length > 0) {
       importDiagramFromAi(addNodeActions, addEdgeActions, 'append');
-      if (addNodeActions.length > 0 && addEdgeActions.length > 0) {
-        const names = addNodeActions.map((a) => a.name).join(', ');
-        toast.success(`Clases creadas (${names}) y relaciones vinculadas`);
-      } else if (addNodeActions.length > 0) {
-        const names = addNodeActions.map((a) => a.name).join(', ');
-        toast.success(`Clases creadas: ${names}`);
-      } else {
-        toast.success('Relaciones actualizadas / creadas');
+      const names = addNodeActions.map((a) => a.name).join(', ');
+      if (names) {
+        toast.success(`Clases creadas por la IA: ${names}`);
       }
     }
   }, [nodes, importDiagramFromAi, updateNodeData, deleteNode]);
 
-  // Enviar mensaje al backend
+  // Escuchar evento global de acciones transmitidas por WebSocket (CU-11)
+  useEffect(() => {
+    const handleApplyEvent = (event: any) => {
+      if (event.detail && Array.isArray(event.detail)) {
+        applyActions(event.detail);
+      }
+    };
+    window.addEventListener('apply_ai_actions', handleApplyEvent);
+    return () => window.removeEventListener('apply_ai_actions', handleApplyEvent);
+  }, [applyActions]);
+
+  // Enviar mensaje al canal WebSocket colaborativo
   const handleSend = useCallback(async () => {
     const text = inputText.trim();
-    if (!text || isLoading) return;
+    if (!text || isAiTyping) return;
 
-    const userMessage: ChatMessage = {
-      id: `msg_${Date.now()}`,
-      role: 'user',
-      text,
-      timestamp: new Date(),
-    };
+    const diagramContext = buildDiagramContext();
+    const sent = onSendTeamMessage(text, diagramContext);
 
-    setMessages((prev) => [...prev, userMessage]);
-    setInputText('');
-    setIsLoading(true);
-
-    try {
-      const diagramContext = buildDiagramContext();
-      const response = await apiClient.post('/api/ia/chat/', {
-        message: text,
-        diagramContext,
-      });
-
-      const data = response.data;
-
-      if (data.success) {
-        const assistantMessage: ChatMessage = {
-          id: `msg_${Date.now()}_ai`,
-          role: 'assistant',
-          text: data.reply || 'Entendido.',
-          actions: data.actions,
-          actionsApplied: false,
-          timestamp: new Date(),
-        };
-
-        setMessages((prev) => [...prev, assistantMessage]);
-
-        // Aplicar acciones automáticamente
-        if (data.actions && data.actions.length > 0) {
-          setTimeout(() => {
-            applyActions(data.actions);
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === assistantMessage.id ? { ...m, actionsApplied: true } : m
-              )
-            );
-          }, 500);
+    if (sent) {
+      setInputText('');
+    } else {
+      // Fallback HTTP si el socket estuviese reconectando
+      try {
+        const res = await apiClient.post('/api/ia/chat/', {
+          message: text,
+          diagramContext,
+          sender_name: currentUsername,
+          project_id: projectId
+        });
+        if (res.data?.success) {
+          setInputText('');
+          if (res.data.actions && res.data.actions.length > 0) {
+            applyActions(res.data.actions);
+          }
         }
-      } else {
-        toast.error(data.error || 'Error al obtener respuesta de la IA');
+      } catch (err) {
+        toast.error("Error al enviar mensaje");
       }
-    } catch (error: any) {
-      const errMsg = error?.response?.data?.error || 'Error de conexión con el servidor';
-      toast.error(errMsg);
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `msg_${Date.now()}_err`,
-          role: 'assistant',
-          text: `Error: ${errMsg}`,
-          timestamp: new Date(),
-        },
-      ]);
-    } finally {
-      setIsLoading(false);
     }
-  }, [inputText, isLoading, buildDiagramContext, applyActions]);
+  }, [inputText, isAiTyping, buildDiagramContext, onSendTeamMessage, currentUsername, projectId, applyActions]);
 
-  // Reconocimiento de voz con Web Speech API
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSend();
+    }
+  };
+
+  // Reconocimiento de voz
   const toggleVoice = useCallback(() => {
     const SpeechRecognition =
       (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
@@ -388,105 +388,68 @@ export const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ isOpen, onCl
       return;
     }
 
-    // Si ya está escuchando, detener manualmente
-    if (isListening && recognitionRef.current) {
-      recognitionRef.current.stop();
-      recognitionRef.current = null;
+    if (isListening) {
+      recognitionRef.current?.stop();
       setIsListening(false);
       return;
     }
 
-    const recognition = new SpeechRecognition();
-    recognition.lang = 'es-ES';
-    recognition.interimResults = true;
-    recognition.continuous = true; // No se apaga solo, el usuario controla cuándo parar
+    try {
+      const recognition = new SpeechRecognition();
+      recognition.lang = 'es-ES';
+      recognition.continuous = false;
+      recognition.interimResults = true;
 
-    let finalTranscript = '';
+      recognition.onstart = () => {
+        setIsListening(true);
+        toast('Escuchando...', { icon: '🎙️', duration: 2000 });
+      };
 
-    recognition.onresult = (event: SpeechRecognitionEvent) => {
-      let interim = '';
-      for (let i = event.resultIndex; i < Object.keys(event.results).length; i++) {
-        const result = event.results[i];
-        if ((result as any).isFinal) {
-          finalTranscript += result[0].transcript + ' ';
-        } else {
-          interim += result[0].transcript;
+      recognition.onresult = (event: SpeechRecognitionEvent) => {
+        let transcript = '';
+        for (let i = event.resultIndex; i < Object.keys(event.results).length; i++) {
+          transcript += event.results[i][0].transcript;
         }
-      }
-      setInputText((finalTranscript + interim).trim());
-    };
+        setInputText(transcript);
+      };
 
-    recognition.onend = () => {
-      // En modo continuo, el navegador puede detener la sesión internamente.
-      // Si el usuario no pidió parar, reiniciar automáticamente.
-      if (recognitionRef.current && isListening) {
-        try {
-          recognition.start();
-        } catch (_) {
-          setIsListening(false);
-          recognitionRef.current = null;
-        }
-      } else {
+      recognition.onerror = (event: any) => {
+        console.error('Error reconocimiento de voz:', event.error);
         setIsListening(false);
-        recognitionRef.current = null;
-      }
-    };
+        if (event.error !== 'no-speech') {
+          toast.error(`Error de voz: ${event.error}`);
+        }
+      };
 
-    recognition.onerror = (event: any) => {
-      // 'no-speech' y 'aborted' son normales, no mostrar error
-      if (event.error === 'no-speech' || event.error === 'aborted') return;
+      recognition.onend = () => {
+        setIsListening(false);
+      };
+
+      recognitionRef.current = recognition;
+      recognition.start();
+    } catch (error) {
+      console.error('Error iniciando reconocimiento de voz:', error);
       setIsListening(false);
-      recognitionRef.current = null;
-      toast.error('Error en el reconocimiento de voz');
-    };
-
-    recognitionRef.current = recognition;
-    recognition.start();
-    setIsListening(true);
-    toast.success('Micrófono activado. Habla y pulsa Stop cuando termines.');
+    }
   }, [isListening]);
 
-  // Limpiar historial
-  const handleClear = () => {
-    setMessages([]);
-    toast.success('Historial del asistente limpiado');
-  };
-
-  // Manejar teclas en el textarea
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
-  };
-
   return (
-    <div className={`ai-assistant-panel ${isOpen ? 'open' : ''}`}>
-      {/* Cabecera del panel */}
+    <aside className={`ai-assistant-panel ${isOpen ? 'open' : ''}`}>
+      {/* Header compacto estilo original */}
       <div className="ai-panel-header">
         <div className="ai-panel-title">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <path d="M12 2a7 7 0 017 7c0 2.38-1.19 4.47-3 5.74V17a2 2 0 01-2 2H10a2 2 0 01-2-2v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 017-7z" />
             <line x1="10" y1="22" x2="14" y2="22" />
           </svg>
-          <span>Asistente IA</span>
+          <span>IA Senior Colaborativa</span>
         </div>
         <div className="ai-panel-header-actions">
           <button
             type="button"
-            className="ai-panel-clear-btn"
-            onClick={handleClear}
-            title="Limpiar historial"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-            </svg>
-          </button>
-          <button
-            type="button"
             className="ai-panel-close-btn"
             onClick={onClose}
-            title="Cerrar asistente"
+            title="Cerrar panel"
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <line x1="18" y1="6" x2="6" y2="18" />
@@ -496,62 +459,109 @@ export const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ isOpen, onCl
         </div>
       </div>
 
-      {/* Área de mensajes */}
+      {/* Lista de mensajes */}
       <div className="ai-panel-messages">
-        {messages.length === 0 && (
+        {teamMessages.length === 0 && (
           <div className="ai-panel-empty">
             <div className="ai-empty-icon">
-              <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
+              <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#2563eb" strokeWidth="1.8">
+                <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2" />
+                <circle cx="9" cy="7" r="4" />
+                <path d="M23 21v-2a4 4 0 00-3-3.87" />
+                <path d="M16 3.13a4 4 0 010 7.75" />
               </svg>
             </div>
-            <p className="ai-empty-title">¿En qué puedo ayudarte?</p>
+            <p className="ai-empty-title">¡Bienvenidos a la sesión colaborativa!</p>
             <p className="ai-empty-hint">
-              Puedo crear clases, agregar atributos, crear relaciones, o responder preguntas sobre UML.
+              Soy su <strong>Arquitecto Senior</strong>. Puedo resolver dudas conceptuales,
+              explicar cuándo usar agregación vs composición, o construir y refactorizar clases en vivo para todo el equipo.
             </p>
             <div className="ai-empty-examples">
-              <button type="button" onClick={() => setInputText('Crea una clase Producto con atributos id, nombre y precio')}>
-                Crear una clase Producto
+              <button
+                type="button"
+                onClick={() => setInputText('¿Qué diferencia hay entre composición y agregación en nuestro diagrama?')}
+              >
+                Composición vs Agregación
               </button>
-              <button type="button" onClick={() => setInputText('¿Cuántas clases tengo en mi diagrama?')}>
-                ¿Cuántas clases tengo?
+              <button
+                type="button"
+                onClick={() => setInputText('Crea la clase Pago con id, monto y fecha, y asóciala 1 a 1 con Pedido.')}
+              >
+                Agregar clase y relación
               </button>
-              <button type="button" onClick={() => setInputText('Revisa mi diagrama y sugiere mejoras')}>
-                Sugerir mejoras
+              <button
+                type="button"
+                onClick={() => setInputText('¿Qué avances o elementos tiene actualmente nuestro diagrama?')}
+              >
+                Resumen de avance
               </button>
             </div>
           </div>
         )}
 
-        {messages.map((msg) => (
-          <div key={msg.id} className={`ai-message ${msg.role}`}>
-            <div className="ai-message-bubble">
-              <p className="ai-message-text">{msg.text}</p>
-              {msg.actions && msg.actions.length > 0 && (
-                <div className={`ai-actions-badge ${msg.actionsApplied ? 'applied' : ''}`}>
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    {msg.actionsApplied ? (
-                      <path d="M20 6L9 17l-5-5" />
-                    ) : (
-                      <path d="M12 5v14M5 12h14" />
-                    )}
-                  </svg>
-                  <span>
-                    {msg.actionsApplied
-                      ? `${msg.actions.length} acción(es) aplicada(s)`
-                      : `Aplicando ${msg.actions.length} acción(es)...`}
-                  </span>
-                </div>
-              )}
-            </div>
-            <span className="ai-message-time">
-              {msg.timestamp.toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' })}
-            </span>
-          </div>
-        ))}
+        {teamMessages.map((msg) => {
+          const isMe = msg.role === 'user' && msg.senderName === currentUsername;
+          const isAi = msg.role === 'assistant';
+          const authorColor = isAi ? '#059669' : (msg.senderColor || '#2563eb');
 
-        {isLoading && (
+          return (
+            <div
+              key={msg.id}
+              className={`ai-message ${isAi ? 'assistant' : 'user'}`}
+              style={{
+                alignSelf: isMe ? 'flex-end' : isAi ? 'stretch' : 'flex-start',
+                alignItems: isMe ? 'flex-end' : 'flex-start'
+              }}
+            >
+              {/* Encabezado con autor visible y legible */}
+              <div style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                marginBottom: '3px',
+                padding: '2px 8px',
+                borderRadius: '6px',
+                background: '#f1f5f9',
+                border: `1px solid ${authorColor}40`,
+                fontSize: '11px',
+                fontWeight: 700,
+                color: authorColor
+              }}>
+                <span>{isAi ? '🤖 IA Senior (Arquitecto)' : (msg.senderName || 'Colaborador')}</span>
+                {isMe && <span style={{ color: '#64748b', fontWeight: 500 }}>(Tú)</span>}
+              </div>
+
+              <div
+                className="ai-message-bubble"
+                style={{
+                  borderLeft: isAi ? '4px solid #10b981' : `4px solid ${authorColor}`,
+                  background: isAi ? '#f0fdf4' : (isMe ? '#eff6ff' : '#ffffff'),
+                  color: '#0f172a',
+                  boxShadow: '0 1px 3px rgba(0,0,0,0.06)'
+                }}
+              >
+                <p className="ai-message-text" style={{ whiteSpace: 'pre-wrap', color: '#0f172a' }}>{msg.text}</p>
+                {msg.actions && msg.actions.length > 0 && (
+                  <div className="ai-actions-badge applied">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M20 6L9 17l-5-5" />
+                    </svg>
+                    <span>{msg.actions.length} cambio(s) aplicado(s) al canvas del equipo</span>
+                  </div>
+                )}
+              </div>
+              <span className="ai-message-time" style={{ color: '#64748b' }}>
+                {msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' }) : ''}
+              </span>
+            </div>
+          );
+        })}
+
+        {isAiTyping && (
           <div className="ai-message assistant">
+            <div style={{ fontSize: '11px', color: '#059669', fontWeight: 700, marginBottom: '3px' }}>
+              🤖 IA Senior analizando {aiTypingFor ? `la consulta de ${aiTypingFor}` : 'para el equipo'}...
+            </div>
             <div className="ai-message-bubble loading">
               <span className="ai-typing-dot"></span>
               <span className="ai-typing-dot"></span>
@@ -569,20 +579,20 @@ export const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ isOpen, onCl
           <textarea
             ref={inputRef}
             className="ai-input-text"
-            placeholder="Escribe un mensaje o usa el micrófono..."
+            placeholder="Pregunta o pide cambios para el equipo (Enter para enviar)..."
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
             onKeyDown={handleKeyDown}
             rows={1}
-            disabled={isLoading}
+            disabled={isAiTyping}
           />
           <div className="ai-input-actions">
             <button
               type="button"
               className={`ai-mic-btn ${isListening ? 'listening' : ''}`}
               onClick={toggleVoice}
-              title={isListening ? 'Detener grabación' : 'Iniciar reconocimiento de voz'}
-              disabled={isLoading}
+              title={isListening ? 'Detener grabación' : 'Voz'}
+              disabled={isAiTyping}
             >
               {isListening ? (
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
@@ -601,8 +611,8 @@ export const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ isOpen, onCl
               type="button"
               className="ai-send-btn"
               onClick={handleSend}
-              disabled={!inputText.trim() || isLoading}
-              title="Enviar mensaje"
+              disabled={!inputText.trim() || isAiTyping}
+              title="Enviar mensaje a la sala"
             >
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <line x1="22" y1="2" x2="11" y2="13" />
@@ -612,6 +622,6 @@ export const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ isOpen, onCl
           </div>
         </div>
       </div>
-    </div>
+    </aside>
   );
 };

@@ -1,9 +1,12 @@
 import json
+import asyncio
 from urllib.parse import parse_qs
 from collections import defaultdict
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from channels.db import database_sync_to_async
 from .models import Proyecto, Diagrama
+from ia_asistente.models import MensajeColaborativoIA
+from ia_asistente.senior_service import generate_senior_ai_response
 
 # Registro global de presencia por sala: room_name -> { channel_name: { 'username': ..., 'color': ..., 'id': ... } }
 ROOM_COLLABORATORS = defaultdict(dict)
@@ -51,6 +54,32 @@ class DiagramaConsumer(AsyncJsonWebsocketConsumer):
         }
 
         await self.accept()
+
+        # Enviar estado actual de presencia al cliente recién conectado de inmediato
+        active_users = list(ROOM_COLLABORATORS[self.room_group_name].values())
+        await self.send_json({
+            'type': 'presence_update',
+            'users': active_users,
+            'count': len(active_users)
+        })
+
+        # Enviar de inmediato el estado del diagrama guardado al nuevo cliente
+        diagram_data = await self.get_initial_diagram(self.project_id)
+        if diagram_data:
+            await self.send_json({
+                'type': 'diagram_update',
+                'nodes': diagram_data.get('nodes', []),
+                'edges': diagram_data.get('edges', []),
+                'viewport': diagram_data.get('viewport', {})
+            })
+
+        # Enviar de inmediato el historial de conversación IA de la sala al nuevo cliente
+        chat_history = await self.get_initial_chat_history(self.project_id)
+        if chat_history:
+            await self.send_json({
+                'type': 'chat_history',
+                'messages': chat_history
+            })
 
         # Notificar a todos en la sala sobre el nuevo colaborador y la lista actualizada
         await self.broadcast_presence_state()
@@ -111,6 +140,140 @@ class DiagramaConsumer(AsyncJsonWebsocketConsumer):
                     }
                 )
 
+        elif action_type == 'team_ai_message':
+            # CU-11: Mensaje colaborativo para la IA Senior
+            sender_name = content.get('senderName', self.username)
+            sender_color = content.get('senderColor', self.user_color)
+            message_text = content.get('message', '').strip()
+            diagram_context = content.get('diagramContext', {})
+
+            if not message_text:
+                return
+
+            # 1. Broadcast inmediato a toda la sala del mensaje del usuario
+            user_msg_payload = {
+                'type': 'team_ai_message',
+                'id': f"msg_user_{content.get('id', self.channel_name)}",
+                'role': 'user',
+                'senderName': sender_name,
+                'senderColor': sender_color,
+                'text': message_text,
+                'timestamp': content.get('timestamp')
+            }
+            await self.channel_layer.group_send(
+                self.room_group_name,
+                {
+                    'type': 'relay_message',
+                    'data': user_msg_payload
+                }
+            )
+
+            # 2. Broadcast de estado 'typing' de la IA Senior
+            await self.channel_layer.group_send(
+                self.room_group_name,
+                {
+                    'type': 'relay_message',
+                    'data': {
+                        'type': 'team_ai_typing',
+                        'isTyping': True,
+                        'forUser': sender_name
+                    }
+                }
+            )
+
+            # 3. Guardar mensaje de usuario en BD
+            await self.persist_team_message(
+                project_id=self.project_id,
+                sender_name=sender_name,
+                sender_color=sender_color,
+                role='user',
+                text=message_text,
+                actions=[]
+            )
+
+            # 4. Procesar con el servicio IA Senior asíncronamente
+            asyncio.create_task(
+                self.process_and_broadcast_ai_response(
+                    sender_name=sender_name,
+                    message_text=message_text,
+                    diagram_context=diagram_context
+                )
+            )
+
+    async def process_and_broadcast_ai_response(self, sender_name, message_text, diagram_context):
+        try:
+            # Obtener historial reciente de la BD
+            history = await self.get_recent_history(self.project_id)
+
+            # Ejecutar el servicio síncrono de IA en un threadpool
+            ai_result = await asyncio.to_thread(
+                generate_senior_ai_response,
+                sender_name=sender_name,
+                user_message=message_text,
+                diagram_context=diagram_context,
+                recent_history=history
+            )
+
+            reply_text = ai_result.get('reply', '')
+            actions = ai_result.get('actions', [])
+
+            # Guardar respuesta IA en BD
+            saved_msg = await self.persist_team_message(
+                project_id=self.project_id,
+                sender_name='IA Senior',
+                sender_color='#10b981',
+                role='assistant',
+                text=reply_text,
+                actions=actions
+            )
+
+            # Retransmitir respuesta de la IA a toda la sala
+            await self.channel_layer.group_send(
+                self.room_group_name,
+                {
+                    'type': 'relay_message',
+                    'data': {
+                        'type': 'team_ai_message',
+                        'id': f"msg_ai_{saved_msg.id if saved_msg else 'temp'}",
+                        'role': 'assistant',
+                        'senderName': 'IA Senior',
+                        'senderColor': '#10b981',
+                        'text': reply_text,
+                        'actions': actions,
+                        'timestamp': None
+                    }
+                }
+            )
+
+        except Exception as e:
+            print(f"Error procesando respuesta IA en sala {self.room_group_name}: {e}")
+            await self.channel_layer.group_send(
+                self.room_group_name,
+                {
+                    'type': 'relay_message',
+                    'data': {
+                        'type': 'team_ai_message',
+                        'role': 'assistant',
+                        'senderName': 'IA Senior',
+                        'senderColor': '#10b981',
+                        'text': f"Disculpa {sender_name}, ocurrió un error al procesar tu solicitud.",
+                        'actions': []
+                    }
+                }
+            )
+        finally:
+            # Quitar estado typing
+            await self.channel_layer.group_send(
+                self.room_group_name,
+                {
+                    'type': 'relay_message',
+                    'data': {
+                        'type': 'team_ai_typing',
+                        'isTyping': False
+                    }
+                }
+            )
+
     async def relay_message(self, event):
         # Envía el mensaje JSON al cliente WebSocket conectado
         await self.send_json(event['data'])
@@ -154,3 +317,81 @@ class DiagramaConsumer(AsyncJsonWebsocketConsumer):
             Proyecto.objects.filter(id=project_id).update(package_base=name)
         except Exception as e:
             print(f"Error actualizando nombre de proyecto {project_id}: {e}")
+
+    @database_sync_to_async
+    def persist_team_message(self, project_id, sender_name, sender_color, role, text, actions):
+        try:
+            proyecto = Proyecto.objects.filter(id=project_id).first()
+            if not proyecto:
+                return None
+            return MensajeColaborativoIA.objects.create(
+                proyecto=proyecto,
+                sender_name=sender_name,
+                sender_color=sender_color,
+                role=role,
+                text=text,
+                actions=actions or []
+            )
+        except Exception as e:
+            print(f"Error guardando mensaje de equipo en BD: {e}")
+            return None
+
+    @database_sync_to_async
+    def get_recent_history(self, project_id):
+        try:
+            proyecto = Proyecto.objects.filter(id=project_id).first()
+            if not proyecto:
+                return []
+            msgs = MensajeColaborativoIA.objects.filter(proyecto=proyecto).order_by('-created_at')[:8]
+            return [
+                {
+                    'sender_name': m.sender_name,
+                    'role': m.role,
+                    'text': m.text
+                }
+                for m in reversed(list(msgs))
+            ]
+        except Exception as e:
+            print(f"Error obteniendo historial: {e}")
+            return []
+
+    @database_sync_to_async
+    def get_initial_diagram(self, project_id):
+        try:
+            proyecto = Proyecto.objects.filter(id=project_id).first()
+            if not proyecto:
+                return None
+            diagrama = Diagrama.objects.filter(proyecto=proyecto).first()
+            if not diagrama:
+                return None
+            return {
+                'nodes': diagrama.nodes or [],
+                'edges': diagrama.edges or [],
+                'viewport': diagrama.viewport or {}
+            }
+        except Exception as e:
+            print(f"Error cargando diagrama inicial {project_id}: {e}")
+            return None
+
+    @database_sync_to_async
+    def get_initial_chat_history(self, project_id):
+        try:
+            proyecto = Proyecto.objects.filter(id=project_id).first()
+            if not proyecto:
+                return []
+            mensajes = MensajeColaborativoIA.objects.filter(proyecto=proyecto).order_by('created_at')[:50]
+            return [
+                {
+                    'id': str(m.id),
+                    'role': m.role,
+                    'sender_name': m.sender_name,
+                    'sender_color': m.sender_color,
+                    'text': m.text,
+                    'actions': m.actions or [],
+                    'timestamp': m.created_at.isoformat()
+                }
+                for m in mensajes
+            ]
+        except Exception as e:
+            print(f"Error cargando historial de chat {project_id}: {e}")
+            return []
