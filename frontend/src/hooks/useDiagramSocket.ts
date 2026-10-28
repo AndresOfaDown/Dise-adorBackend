@@ -180,6 +180,17 @@ export function useDiagramSocket(projectId: number | null) {
             }
             return;
           }
+
+          // 7. Evento de Auditoría / Historial de Cambios (CU-12)
+          if (payload.type === 'audit_change_event') {
+            const change = payload.change;
+            if (change) {
+              window.dispatchEvent(
+                new CustomEvent('audit_change_event', { detail: change })
+              );
+            }
+            return;
+          }
         } catch (err) {
           console.error('Error parseando mensaje WebSocket colaborativo:', err);
         }

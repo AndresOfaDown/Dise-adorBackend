@@ -1,10 +1,10 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.shortcuts import get_object_or_404
 from django.http import HttpResponse
-from .models import Proyecto, Diagrama
+from .models import Proyecto, Diagrama, HistorialCambioDiagrama
 from .serializers import ProyectoSerializer, ProyectoCreateSerializer, DiagramaSerializer
 from .uml_service import export_diagram_to_xmi, export_diagram_to_puml, parse_uml_file
 
@@ -293,4 +293,106 @@ class DiagramaImportUmlAPIView(APIView):
                 {'error': f'Error al procesar el archivo UML: {str(e)}'},
                 status=status.HTTP_400_BAD_REQUEST
             )
+
+
+class HistorialCambioDiagramaAPIView(APIView):
+    """
+    CU-12: Registro y consulta del historial de auditoría de modificaciones del diagrama por usuario.
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request, project_id):
+        proyecto = Proyecto.objects.filter(id=project_id).first()
+        if not proyecto:
+            return Response({'success': False, 'error': 'Proyecto no encontrado'}, status=status.HTTP_404_NOT_FOUND)
+
+        cambios = HistorialCambioDiagrama.objects.filter(proyecto=proyecto).order_by('-created_at')[:100]
+
+        if not cambios.exists():
+            from .audit_seeder import seed_initial_audit_history
+            seed_initial_audit_history(proyecto)
+            cambios = HistorialCambioDiagrama.objects.filter(proyecto=proyecto).order_by('-created_at')[:100]
+
+        data = [
+            {
+                'id': c.id,
+                'usuario_nombre': c.usuario_nombre,
+                'usuario_color': c.usuario_color,
+                'tipo_accion': c.tipo_accion,
+                'entidad_afectada': c.entidad_afectada,
+                'descripcion': c.descripcion,
+                'detalles': c.detalles,
+                'created_at': c.created_at.isoformat()
+            }
+            for c in cambios
+        ]
+        return Response({'success': True, 'historial': data})
+
+    def post(self, request, project_id):
+        proyecto = Proyecto.objects.filter(id=project_id).first()
+        if not proyecto:
+            return Response({'success': False, 'error': 'Proyecto no encontrado'}, status=status.HTTP_404_NOT_FOUND)
+
+        usuario_nombre = request.data.get('usuario_nombre') or (request.user.username if request.user.is_authenticated else 'Colaborador')
+        usuario_color = request.data.get('usuario_color') or '#2563eb'
+        tipo_accion = request.data.get('tipo_accion', 'modificar_clase')
+        entidad_afectada = request.data.get('entidad_afectada', '')
+        descripcion = request.data.get('descripcion', '')
+        detalles = request.data.get('detalles', {})
+
+        if not descripcion:
+            return Response({'success': False, 'error': 'La descripción es requerida'}, status=status.HTTP_400_BAD_REQUEST)
+
+        cambio = HistorialCambioDiagrama.objects.create(
+            proyecto=proyecto,
+            usuario_nombre=usuario_nombre,
+            usuario_color=usuario_color,
+            tipo_accion=tipo_accion,
+            entidad_afectada=entidad_afectada,
+            descripcion=descripcion,
+            detalles=detalles
+        )
+
+        # Difundir a la sala WebSocket en vivo
+        try:
+            from asgiref.sync import async_to_sync
+            from channels.layers import get_channel_layer
+            channel_layer = get_channel_layer()
+            if channel_layer:
+                async_to_sync(channel_layer.group_send)(
+                    f'diagrama_{project_id}',
+                    {
+                        'type': 'relay_message',
+                        'data': {
+                            'type': 'audit_change_event',
+                            'change': {
+                                'id': cambio.id,
+                                'usuario_nombre': cambio.usuario_nombre,
+                                'usuario_color': cambio.usuario_color,
+                                'tipo_accion': cambio.tipo_accion,
+                                'entidad_afectada': cambio.entidad_afectada,
+                                'descripcion': cambio.descripcion,
+                                'detalles': cambio.detalles,
+                                'created_at': cambio.created_at.isoformat()
+                            }
+                        }
+                    }
+                )
+        except Exception as e:
+            print(f"Error difundiendo audit_change_event por websocket: {e}")
+
+        return Response({
+            'success': True,
+            'change': {
+                'id': cambio.id,
+                'usuario_nombre': cambio.usuario_nombre,
+                'usuario_color': cambio.usuario_color,
+                'tipo_accion': cambio.tipo_accion,
+                'entidad_afectada': cambio.entidad_afectada,
+                'descripcion': cambio.descripcion,
+                'detalles': cambio.detalles,
+                'created_at': cambio.created_at.isoformat()
+            }
+        }, status=status.HTTP_201_CREATED)
+
 

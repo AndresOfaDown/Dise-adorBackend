@@ -23,6 +23,7 @@ import { useAutoSave } from '../../hooks/useAutoSave';
 import { distributeEdgeHandles } from '../../utils/edgeRouting';
 import { useDiagramSocket } from '../../hooks/useDiagramSocket';
 import { RemoteCursors } from './RemoteCursors';
+import { recordDiagramAudit } from '../../utils/auditLogger';
 
 const nodeTypes: NodeTypes = {
   umlClass: UmlClassNode,
@@ -190,12 +191,26 @@ const EditorCanvas: React.FC<EditorCanvasProps> = ({ socket }) => {
   }, []);
 
   const handleDeleteEdgeFromContext = (edgeId: string) => {
+    const edgeToDelete = useDiagramStore.getState().edges.find((e) => e.id === edgeId);
+    const nodesList = useDiagramStore.getState().nodes;
+    const srcNode = nodesList.find((n) => n.id === edgeToDelete?.source);
+    const tgtNode = nodesList.find((n) => n.id === edgeToDelete?.target);
+    const srcName = srcNode?.data?.name || 'Clase';
+    const tgtName = tgtNode?.data?.name || 'Clase';
+
     useDiagramStore.setState((state) => ({
       edges: state.edges.filter((e) => e.id !== edgeId),
       hasUnsavedChanges: true,
     }));
     setContextMenu(null);
     toast.success('Relación eliminada');
+
+    recordDiagramAudit({
+      tipo_accion: 'eliminar_relacion',
+      entidad_afectada: `${srcName} -> ${tgtName}`,
+      descripcion: `Eliminó la relación entre '${srcName}' y '${tgtName}'.`,
+      detalles: { edgeId, source: srcName, target: tgtName }
+    });
   };
 
   const handleDeleteNodeFromContext = (nodeId: string) => {
@@ -473,6 +488,7 @@ export const ClassDiagramEditor: React.FC = () => {
   const { activeProjectId } = useNavigationStore();
   const { loadProjectDiagram, isLoading, nodes } = useDiagramStore();
   const [isAiPanelOpen, setIsAiPanelOpen] = useState(false);
+  const [rightPanelTab, setRightPanelTab] = useState<'chat' | 'history'>('chat');
 
   // Instancia única y compartida del WebSocket
   const diagramSocket = useDiagramSocket(activeProjectId);
@@ -488,6 +504,24 @@ export const ClassDiagramEditor: React.FC = () => {
     }
   }, [activeProjectId, loadProjectDiagram]);
 
+  const handleToggleAiPanel = () => {
+    if (isAiPanelOpen && rightPanelTab === 'chat') {
+      setIsAiPanelOpen(false);
+    } else {
+      setIsAiPanelOpen(true);
+      setRightPanelTab('chat');
+    }
+  };
+
+  const handleToggleAuditHistory = () => {
+    if (isAiPanelOpen && rightPanelTab === 'history') {
+      setIsAiPanelOpen(false);
+    } else {
+      setIsAiPanelOpen(true);
+      setRightPanelTab('history');
+    }
+  };
+
   if (isLoading && nodes.length === 0) {
     return (
       <div className="editor-loading-screen">
@@ -500,8 +534,10 @@ export const ClassDiagramEditor: React.FC = () => {
   return (
     <div className="uml-editor-root">
       <EditorHeader
-        isAiPanelOpen={isAiPanelOpen}
-        onToggleAiPanel={() => setIsAiPanelOpen(!isAiPanelOpen)}
+        isAiPanelOpen={isAiPanelOpen && rightPanelTab === 'chat'}
+        onToggleAiPanel={handleToggleAiPanel}
+        isAuditHistoryOpen={isAiPanelOpen && rightPanelTab === 'history'}
+        onToggleAuditHistory={handleToggleAuditHistory}
       />
       <div className={`editor-body-layout ${isAiPanelOpen ? 'ai-panel-open' : ''}`}>
         <ToolSidebar />
@@ -517,6 +553,8 @@ export const ClassDiagramEditor: React.FC = () => {
           aiTypingFor={diagramSocket.aiTypingFor}
           onSendTeamMessage={diagramSocket.sendTeamAiMessage}
           projectId={activeProjectId}
+          activeTab={rightPanelTab}
+          onSwitchTab={(tab) => setRightPanelTab(tab)}
         />
       </div>
     </div>

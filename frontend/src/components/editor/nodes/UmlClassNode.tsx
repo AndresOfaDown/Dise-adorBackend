@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Handle, Position, type NodeProps } from 'reactflow';
 import { useDiagramStore, type UmlClassNodeData, type UmlAttribute, type UmlMethod } from '../../../store/diagramStore';
+import { recordDiagramAudit } from '../../../utils/auditLogger';
 import toast from 'react-hot-toast';
 
 export const UmlClassNode: React.FC<NodeProps<UmlClassNodeData>> = ({ id, data, selected }) => {
@@ -54,8 +55,17 @@ export const UmlClassNode: React.FC<NodeProps<UmlClassNodeData>> = ({ id, data, 
   // Nombre de clase
   const handleNameBlur = () => {
     setIsEditingName(false);
-    if (className.trim()) {
-      updateNodeData(id, { name: className.trim() });
+    const trimmed = className.trim();
+    if (trimmed) {
+      if (trimmed !== data.name) {
+        updateNodeData(id, { name: trimmed });
+        recordDiagramAudit({
+          tipo_accion: 'modificar_clase',
+          entidad_afectada: trimmed,
+          descripcion: `Renombró la clase '${data.name || 'Entidad'}' a '${trimmed}'.`,
+          detalles: { id, oldName: data.name, newName: trimmed },
+        });
+      }
     } else {
       setClassName(data.name || 'Entidad');
     }
@@ -166,14 +176,31 @@ export const UmlClassNode: React.FC<NodeProps<UmlClassNodeData>> = ({ id, data, 
     const updated = [...(data.attributes || []), newAttr];
     updateNodeData(id, { attributes: updated });
     setEditingAttrId(newAttr.id);
+
+    recordDiagramAudit({
+      tipo_accion: 'crear_atributo',
+      entidad_afectada: `${className}.${newAttr.name}`,
+      descripcion: `Añadió el atributo '${newAttr.name}: string' a la clase '${className}'.`,
+      detalles: { classId: id, className, attribute: newAttr },
+    });
   };
 
   // Eliminar atributo
   const handleDeleteAttribute = (attrId: string) => {
+    const attrToDelete = (data.attributes || []).find((a) => a.id === attrId);
     updateNodeData(id, {
       attributes: (data.attributes || []).filter((a) => a.id !== attrId),
     });
     toast.success('Atributo eliminado');
+
+    if (attrToDelete) {
+      recordDiagramAudit({
+        tipo_accion: 'modificar_atributo',
+        entidad_afectada: `${className}.${attrToDelete.name}`,
+        descripcion: `Eliminó el atributo '${attrToDelete.name}' de la clase '${className}'.`,
+        detalles: { classId: id, className, attributeId: attrId, name: attrToDelete.name },
+      });
+    }
   };
 
   // Agregar método

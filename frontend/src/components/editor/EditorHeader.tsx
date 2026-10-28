@@ -8,9 +8,16 @@ import { ShareProjectModal } from './modals/ShareProjectModal';
 interface EditorHeaderProps {
   isAiPanelOpen?: boolean;
   onToggleAiPanel?: () => void;
+  isAuditHistoryOpen?: boolean;
+  onToggleAuditHistory?: () => void;
 }
 
-export const EditorHeader: React.FC<EditorHeaderProps> = ({ isAiPanelOpen, onToggleAiPanel }) => {
+export const EditorHeader: React.FC<EditorHeaderProps> = ({
+  isAiPanelOpen,
+  onToggleAiPanel,
+  isAuditHistoryOpen,
+  onToggleAuditHistory,
+}) => {
   const {
     projectName,
     setProjectName,
@@ -185,6 +192,20 @@ export const EditorHeader: React.FC<EditorHeaderProps> = ({ isAiPanelOpen, onTog
             <line x1="10" y1="22" x2="14" y2="22" />
           </svg>
           <span>Asistente IA</span>
+        </button>
+
+        {/* Botón Historial de Cambios / Auditoría - CU12 */}
+        <button
+          type="button"
+          className={`editor-ai-btn editor-history-btn ${isAuditHistoryOpen ? 'active' : ''}`}
+          onClick={onToggleAuditHistory}
+          title="Ver registro cronológico de cambios de cada colaborador (CU-12)"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <circle cx="12" cy="12" r="10" />
+            <polyline points="12 6 12 12 16 14" />
+          </svg>
+          <span>Historial (CU-12)</span>
         </button>
 
         <div className="editor-brand-divider"></div>

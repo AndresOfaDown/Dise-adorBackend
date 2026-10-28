@@ -419,6 +419,45 @@ class _DiagramMonitorScreenState extends State<DiagramMonitorScreen> with Single
     );
   }
 
+  String _formatDateShort(String isoString) {
+    try {
+      final dt = DateTime.parse(isoString).toLocal();
+      return '${dt.day.toString().padLeft(2, '0')}/${dt.month.toString().padLeft(2, '0')}/${dt.year}';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  String _formatTime(String isoString) {
+    try {
+      final dt = DateTime.parse(isoString).toLocal();
+      return '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  String _getSessionDayLabel(String isoString) {
+    try {
+      final dt = DateTime.parse(isoString).toLocal();
+      final now = DateTime.now();
+      if (dt.year == now.year && dt.month == now.month && dt.day == now.day) {
+        return 'Sesión de Hoy';
+      }
+      final yesterday = now.subtract(const Duration(days: 1));
+      if (dt.year == yesterday.year && dt.month == yesterday.month && dt.day == yesterday.day) {
+        return 'Sesión de Ayer';
+      }
+      const days = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
+      const months = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+      final dayName = days[dt.weekday - 1];
+      final monthName = months[dt.month - 1];
+      return 'Sesión: $dayName, ${dt.day} de $monthName';
+    } catch (_) {
+      return 'Sesión de Trabajo';
+    }
+  }
+
   Widget _buildTeamAiFeed(DiagramMonitorService monitor) {
     if (monitor.messages.isEmpty && !monitor.isAiTyping) {
       return Center(
@@ -477,65 +516,133 @@ class _DiagramMonitorScreenState extends State<DiagramMonitorScreen> with Single
         final msg = monitor.messages[index];
         final isAi = msg.role == 'assistant';
 
-        return Container(
-          margin: const EdgeInsets.symmetric(vertical: 6),
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: isAi ? const Color(0xFFF0FDF4) : Colors.white,
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-              color: isAi ? const Color(0xFF86EFAC) : AppTheme.borderSubtle,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.02),
-                blurRadius: 4,
-                offset: const Offset(0, 2),
-              ),
-            ],
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    isAi ? '🤖 IA Senior (Arquitecto)' : msg.senderName,
-                    style: TextStyle(
-                      color: isAi ? const Color(0xFF15803D) : AppTheme.accentIndigo,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 12,
+        final prevMsg = index > 0 ? monitor.messages[index - 1] : null;
+        final currentDateStr = _formatDateShort(msg.timestamp);
+        final prevDateStr = prevMsg != null ? _formatDateShort(prevMsg.timestamp) : '';
+        final isNewSessionDay = index == 0 || currentDateStr != prevDateStr;
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (isNewSessionDay && msg.timestamp.isNotEmpty)
+              Container(
+                margin: const EdgeInsets.symmetric(vertical: 10),
+                child: Row(
+                  children: [
+                    const Expanded(child: Divider(color: AppTheme.borderSubtle, thickness: 1)),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: AppTheme.borderSubtle),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.03),
+                            blurRadius: 4,
+                            offset: const Offset(0, 1),
+                          ),
+                        ],
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.calendar_today_outlined, size: 11, color: AppTheme.accentIndigo),
+                          const SizedBox(width: 5),
+                          Text(
+                            _getSessionDayLabel(msg.timestamp),
+                            style: const TextStyle(
+                              fontSize: 10.5,
+                              fontWeight: FontWeight.bold,
+                              color: AppTheme.textPrimary,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                  Text(
-                    msg.timestamp.length >= 16 ? msg.timestamp.substring(11, 16) : '',
-                    style: const TextStyle(color: AppTheme.textMuted, fontSize: 10),
+                    const Expanded(child: Divider(color: AppTheme.borderSubtle, thickness: 1)),
+                  ],
+                ),
+              ),
+            Container(
+              margin: const EdgeInsets.symmetric(vertical: 5),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: isAi ? const Color(0xFFF0FDF4) : Colors.white,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: isAi ? const Color(0xFF86EFAC) : AppTheme.borderSubtle,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.02),
+                    blurRadius: 4,
+                    offset: const Offset(0, 2),
                   ),
                 ],
               ),
-              const SizedBox(height: 6),
-              Text(
-                msg.text,
-                style: const TextStyle(color: AppTheme.textPrimary, fontSize: 13, height: 1.35),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        isAi ? '🤖 IA Senior (Arquitecto)' : msg.senderName,
+                        style: TextStyle(
+                          color: isAi ? const Color(0xFF15803D) : AppTheme.accentIndigo,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 12,
+                        ),
+                      ),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            _formatTime(msg.timestamp),
+                            style: const TextStyle(color: AppTheme.textMuted, fontSize: 10),
+                          ),
+                          const SizedBox(width: 4),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFF1F5F9),
+                              borderRadius: BorderRadius.circular(4),
+                              border: Border.all(color: AppTheme.borderSubtle, width: 0.8),
+                            ),
+                            child: Text(
+                              _formatDateShort(msg.timestamp),
+                              style: const TextStyle(color: AppTheme.textSecondary, fontSize: 9, fontWeight: FontWeight.w600),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    msg.text,
+                    style: const TextStyle(color: AppTheme.textPrimary, fontSize: 13, height: 1.35),
+                  ),
+                  if (msg.actions != null && msg.actions!.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFDCFCE7),
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(color: const Color(0xFF86EFAC)),
+                      ),
+                      child: Text(
+                        '⚡ ${msg.actions!.length} cambio(s) aplicado(s) al lienzo',
+                        style: const TextStyle(color: Color(0xFF166534), fontSize: 11, fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                  ],
+                ],
               ),
-              if (msg.actions != null && msg.actions!.isNotEmpty) ...[
-                const SizedBox(height: 8),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFDCFCE7),
-                    borderRadius: BorderRadius.circular(4),
-                    border: Border.all(color: const Color(0xFF86EFAC)),
-                  ),
-                  child: Text(
-                    '⚡ ${msg.actions!.length} cambio(s) aplicado(s) al lienzo',
-                    style: const TextStyle(color: Color(0xFF166534), fontSize: 11, fontWeight: FontWeight.w600),
-                  ),
-                ),
-              ],
-            ],
-          ),
+            ),
+          ],
         );
       },
     );

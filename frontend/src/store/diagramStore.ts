@@ -11,6 +11,7 @@ import {
 } from 'reactflow';
 import { projectsApi } from '../api/projects';
 import { distributeEdgeHandles } from '../utils/edgeRouting';
+import { recordDiagramAudit } from '../utils/auditLogger';
 import toast from 'react-hot-toast';
 
 export type UmlRelationType =
@@ -335,6 +336,15 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
       selectedTool: 'select',
       hasUnsavedChanges: true,
     });
+
+    const srcName = sourceNode?.data?.name || 'Clase';
+    const tgtName = targetNode?.data?.name || 'Clase';
+    recordDiagramAudit({
+      tipo_accion: 'crear_relacion',
+      entidad_afectada: `${srcName} -> ${tgtName}`,
+      descripcion: `Creó relación de tipo '${relationType}' entre '${srcName}' y '${tgtName}'.`,
+      detalles: { source: srcName, target: tgtName, type: relationType },
+    });
   },
 
   updateEdgeData: (edgeId: string, partial: any) => {
@@ -348,12 +358,13 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
   addClassNode: (position) => {
     const newId = `class_${Date.now()}`;
     const classCount = get().nodes.filter((n) => n.type === 'umlClass').length + 1;
+    const className = classCount === 1 ? 'Entidad' : `Entidad${classCount}`;
     const newNode: Node<UmlClassNodeData> = {
       id: newId,
       type: 'umlClass',
       position,
       data: {
-        name: classCount === 1 ? 'Entidad' : `Entidad${classCount}`,
+        name: className,
         stereotype: '',
         attributes: [
           { id: '1', visibility: '+', name: 'id', type: 'int' },
@@ -369,6 +380,13 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
     set({
       nodes: [...get().nodes, newNode],
       selectedTool: 'select', // Vuelve al modo seleccionar tras agregar
+    });
+
+    recordDiagramAudit({
+      tipo_accion: 'crear_clase',
+      entidad_afectada: className,
+      descripcion: `Añadió la clase UML '${className}' al diagrama.`,
+      detalles: { name: className },
     });
   },
 
@@ -423,10 +441,22 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
   },
 
   deleteNode: (nodeId) => {
+    const nodeToDelete = get().nodes.find((n) => n.id === nodeId);
+    const nodeName = nodeToDelete?.data?.name || (nodeToDelete?.type === 'umlText' ? 'Texto' : 'Elemento');
+
     set({
       nodes: get().nodes.filter((n) => n.id !== nodeId),
       edges: get().edges.filter((e) => e.source !== nodeId && e.target !== nodeId),
     });
+
+    if (nodeToDelete) {
+      recordDiagramAudit({
+        tipo_accion: 'eliminar_clase',
+        entidad_afectada: nodeName,
+        descripcion: `Eliminó la clase/elemento '${nodeName}' del diagrama.`,
+        detalles: { id: nodeId, name: nodeName },
+      });
+    }
   },
 
   loadProjectDiagram: async (projectId: number) => {

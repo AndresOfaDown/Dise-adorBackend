@@ -4,6 +4,7 @@ import { apiClient } from '../../api/client';
 import { useDiagramStore } from '../../store/diagramStore';
 import { useAuthStore } from '../../store/authStore';
 import type { TeamAiMessage } from '../../hooks/useDiagramSocket';
+import { DiagramHistoryAuditPanel } from './DiagramHistoryAuditPanel';
 
 interface SpeechRecognitionEvent {
   results: { [index: number]: { [index: number]: { transcript: string } } };
@@ -19,6 +20,8 @@ interface AiAssistantPanelProps {
   aiTypingFor: string | null;
   onSendTeamMessage: (message: string, diagramContext: any) => boolean;
   projectId: number | null;
+  activeTab?: 'chat' | 'history';
+  onSwitchTab?: (tab: 'chat' | 'history') => void;
 }
 
 export const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({
@@ -29,7 +32,9 @@ export const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({
   isAiTyping,
   aiTypingFor,
   onSendTeamMessage,
-  projectId
+  projectId,
+  activeTab = 'chat',
+  onSwitchTab,
 }) => {
   const { user } = useAuthStore();
   const [inputText, setInputText] = useState('');
@@ -433,23 +438,76 @@ export const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({
     }
   }, [isListening]);
 
+  // Agrupamiento y conteo de sesiones continuas (CU-12)
+  const sessionDaysCount = React.useMemo(() => {
+    const dates = new Set<string>();
+    teamMessages.forEach((m) => {
+      if (m.timestamp) {
+        try {
+          dates.add(new Date(m.timestamp).toDateString());
+        } catch (_) {}
+      }
+    });
+    return Math.max(1, dates.size);
+  }, [teamMessages]);
+
+  const getSessionDateLabel = (dateStr?: string) => {
+    if (!dateStr) return 'Sesión de Trabajo';
+    try {
+      const d = new Date(dateStr);
+      const today = new Date();
+      const isToday = d.toDateString() === today.toDateString();
+
+      const yesterday = new Date();
+      yesterday.setDate(yesterday.getDate() - 1);
+      const isYesterday = d.toDateString() === yesterday.toDateString();
+
+      const options: Intl.DateTimeFormatOptions = {
+        weekday: 'long',
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric',
+      };
+      const formatted = d.toLocaleDateString('es-ES', options);
+      const capitalized = formatted.charAt(0).toUpperCase() + formatted.slice(1);
+
+      if (isToday) return `Hoy — ${capitalized}`;
+      if (isYesterday) return `Ayer — ${capitalized}`;
+      return `Sesión: ${capitalized}`;
+    } catch {
+      return 'Sesión de Trabajo';
+    }
+  };
+
   return (
     <aside className={`ai-assistant-panel ${isOpen ? 'open' : ''}`}>
-      {/* Header compacto estilo original */}
+      {/* Header compacto con título dinámico */}
       <div className="ai-panel-header">
         <div className="ai-panel-title">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M12 2a7 7 0 017 7c0 2.38-1.19 4.47-3 5.74V17a2 2 0 01-2 2H10a2 2 0 01-2-2v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 017-7z" />
-            <line x1="10" y1="22" x2="14" y2="22" />
-          </svg>
-          <span>IA Senior Colaborativa</span>
+          {activeTab === 'history' ? (
+            <>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="10" />
+                <polyline points="12 6 12 12 16 14" />
+              </svg>
+              <span>Historial de Cambios (CU-12)</span>
+            </>
+          ) : (
+            <>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M12 2a7 7 0 017 7c0 2.38-1.19 4.47-3 5.74V17a2 2 0 01-2 2H10a2 2 0 01-2-2v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 017-7z" />
+                <line x1="10" y1="22" x2="14" y2="22" />
+              </svg>
+              <span>IA Senior Colaborativa</span>
+            </>
+          )}
         </div>
         <div className="ai-panel-header-actions">
           <button
             type="button"
             className="ai-panel-close-btn"
             onClick={onClose}
-            title="Cerrar panel"
+            title="Cerrar panel lateral"
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <line x1="18" y1="6" x2="6" y2="18" />
@@ -458,6 +516,50 @@ export const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Selector de pestañas: Chat IA Senior vs Historial de Cambios */}
+      <div className="panel-tab-switcher">
+        <button
+          type="button"
+          className={`panel-switch-btn ${activeTab === 'chat' ? 'active' : ''}`}
+          onClick={() => onSwitchTab?.('chat')}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
+          </svg>
+          <span>Chat IA Senior</span>
+        </button>
+        <button
+          type="button"
+          className={`panel-switch-btn ${activeTab === 'history' ? 'active' : ''}`}
+          onClick={() => onSwitchTab?.('history')}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <circle cx="12" cy="12" r="10" />
+            <polyline points="12 6 12 12 16 14" />
+          </svg>
+          <span>Historial Diagrama (CU-12)</span>
+        </button>
+      </div>
+
+      {activeTab === 'history' ? (
+        <DiagramHistoryAuditPanel projectId={projectId} />
+      ) : (
+        <>
+          {/* CU-12: Barra de Auditoría de Sesión Continua */}
+          <div className="ai-panel-audit-bar">
+            <div className="ai-audit-status" title="Persistencia continua en tiempo real activada (CU-12)">
+              <span className="ai-audit-pulse"></span>
+              <span>CU-12: Sesión Continua</span>
+            </div>
+            <div className="ai-audit-stats">
+              <span>Sala #{projectId ?? '1'}</span>
+              <span>•</span>
+              <span>{sessionDaysCount} jornada{sessionDaysCount > 1 ? 's' : ''}</span>
+              <span>•</span>
+              <span>{teamMessages.length} evento{teamMessages.length !== 1 ? 's' : ''}</span>
+            </div>
+          </div>
 
       {/* Lista de mensajes */}
       <div className="ai-panel-messages">
@@ -499,61 +601,95 @@ export const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({
           </div>
         )}
 
-        {teamMessages.map((msg) => {
+        {teamMessages.map((msg, index) => {
           const isMe = msg.role === 'user' && msg.senderName === currentUsername;
           const isAi = msg.role === 'assistant';
           const authorColor = isAi ? '#059669' : (msg.senderColor || '#2563eb');
 
+          const prevMsg = index > 0 ? teamMessages[index - 1] : null;
+          const currentDateStr = msg.timestamp ? new Date(msg.timestamp).toDateString() : '';
+          const prevDateStr = prevMsg?.timestamp ? new Date(prevMsg.timestamp).toDateString() : '';
+          const isNewSessionDay = index === 0 || currentDateStr !== prevDateStr;
+
           return (
-            <div
-              key={msg.id}
-              className={`ai-message ${isAi ? 'assistant' : 'user'}`}
-              style={{
-                alignSelf: isMe ? 'flex-end' : isAi ? 'stretch' : 'flex-start',
-                alignItems: isMe ? 'flex-end' : 'flex-start'
-              }}
-            >
-              {/* Encabezado con autor visible y legible */}
-              <div style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '6px',
-                marginBottom: '3px',
-                padding: '2px 8px',
-                borderRadius: '6px',
-                background: '#f1f5f9',
-                border: `1px solid ${authorColor}40`,
-                fontSize: '11px',
-                fontWeight: 700,
-                color: authorColor
-              }}>
-                <span>{isAi ? '🤖 IA Senior (Arquitecto)' : (msg.senderName || 'Colaborador')}</span>
-                {isMe && <span style={{ color: '#64748b', fontWeight: 500 }}>(Tú)</span>}
-              </div>
+            <React.Fragment key={msg.id}>
+              {isNewSessionDay && (
+                <div className="session-timeline-divider">
+                  <div className="session-divider-line" />
+                  <div className="session-divider-badge">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+                      <line x1="16" y1="2" x2="16" y2="6" />
+                      <line x1="8" y1="2" x2="8" y2="6" />
+                      <line x1="3" y1="10" x2="21" y2="10" />
+                    </svg>
+                    <span>{getSessionDateLabel(msg.timestamp)}</span>
+                  </div>
+                  <div className="session-divider-line" />
+                </div>
+              )}
 
               <div
-                className="ai-message-bubble"
+                className={`ai-message ${isAi ? 'assistant' : 'user'}`}
                 style={{
-                  borderLeft: isAi ? '4px solid #10b981' : `4px solid ${authorColor}`,
-                  background: isAi ? '#f0fdf4' : (isMe ? '#eff6ff' : '#ffffff'),
-                  color: '#0f172a',
-                  boxShadow: '0 1px 3px rgba(0,0,0,0.06)'
+                  alignSelf: isMe ? 'flex-end' : isAi ? 'stretch' : 'flex-start',
+                  alignItems: isMe ? 'flex-end' : 'flex-start'
                 }}
               >
-                <p className="ai-message-text" style={{ whiteSpace: 'pre-wrap', color: '#0f172a' }}>{msg.text}</p>
-                {msg.actions && msg.actions.length > 0 && (
-                  <div className="ai-actions-badge applied">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path d="M20 6L9 17l-5-5" />
+                {/* Encabezado con autor visible y legible */}
+                <div style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  marginBottom: '3px',
+                  padding: '2px 8px',
+                  borderRadius: '6px',
+                  background: '#f1f5f9',
+                  border: `1px solid ${authorColor}40`,
+                  fontSize: '11px',
+                  fontWeight: 700,
+                  color: authorColor
+                }}>
+                  <span>{isAi ? '🤖 IA Senior (Arquitecto)' : (msg.senderName || 'Colaborador')}</span>
+                  {isMe && <span style={{ color: '#64748b', fontWeight: 500 }}>(Tú)</span>}
+                </div>
+
+                <div
+                  className="ai-message-bubble"
+                  style={{
+                    borderLeft: isAi ? '4px solid #10b981' : `4px solid ${authorColor}`,
+                    background: isAi ? '#f0fdf4' : (isMe ? '#eff6ff' : '#ffffff'),
+                    color: '#0f172a',
+                    boxShadow: '0 1px 3px rgba(0,0,0,0.06)'
+                  }}
+                >
+                  <p className="ai-message-text" style={{ whiteSpace: 'pre-wrap', color: '#0f172a' }}>{msg.text}</p>
+                  {msg.actions && msg.actions.length > 0 && (
+                    <div className="ai-actions-badge applied">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M20 6L9 17l-5-5" />
+                      </svg>
+                      <span>{msg.actions.length} cambio(s) aplicado(s) al canvas del equipo</span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="ai-message-footer">
+                  <span className="ai-message-time" title={msg.timestamp ? new Date(msg.timestamp).toLocaleString('es') : ''}>
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ marginRight: 3, verticalAlign: 'middle' }}>
+                      <circle cx="12" cy="12" r="10" />
+                      <polyline points="12 6 12 12 16 14" />
                     </svg>
-                    <span>{msg.actions.length} cambio(s) aplicado(s) al canvas del equipo</span>
-                  </div>
-                )}
+                    {msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : ''}
+                  </span>
+                  {msg.timestamp && (
+                    <span className="ai-message-date-chip" title="Fecha persistida en BD">
+                      {new Date(msg.timestamp).toLocaleDateString('es', { day: '2-digit', month: '2-digit', year: 'numeric' })}
+                    </span>
+                  )}
+                </div>
               </div>
-              <span className="ai-message-time" style={{ color: '#64748b' }}>
-                {msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' }) : ''}
-              </span>
-            </div>
+            </React.Fragment>
           );
         })}
 
@@ -622,6 +758,8 @@ export const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({
           </div>
         </div>
       </div>
+      </>
+      )}
     </aside>
   );
 };
