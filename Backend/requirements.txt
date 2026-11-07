@@ -1,7 +1,16 @@
 asgiref==3.12.1
+channels==4.3.2
+channels_redis==4.3.0
+daphne==4.2.3
 Django==6.1
 django-cors-headers==4.9.0
 djangorestframework==3.18.0
+dnspython==2.9.2
+google-genai==2.20.0
 psycopg2-binary==2.9.12
+pymongo==4.19.0
+python-dotenv==1.2.3
+requests==2.34.2
 sqlparse==0.6.0
-tzdata==2026.3
+Twisted==26.4.0
+websockets==16.1.1
