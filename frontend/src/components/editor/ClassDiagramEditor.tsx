@@ -40,7 +40,7 @@ interface EditorCanvasProps {
 
 const EditorCanvas: React.FC<EditorCanvasProps> = ({ socket }) => {
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
-  const { project } = useReactFlow();
+  const { screenToFlowPosition } = useReactFlow();
 
   const {
     remoteCursors,
@@ -115,10 +115,9 @@ const EditorCanvas: React.FC<EditorCanvasProps> = ({ socket }) => {
       const type = event.dataTransfer.getData('application/reactflow');
       if (!type || !reactFlowWrapper.current) return;
 
-      const reactFlowBounds = reactFlowWrapper.current.getBoundingClientRect();
-      const position = project({
-        x: event.clientX - reactFlowBounds.left,
-        y: event.clientY - reactFlowBounds.top,
+      const position = screenToFlowPosition({
+        x: event.clientX,
+        y: event.clientY,
       });
 
       if (type === 'class') {
@@ -127,7 +126,7 @@ const EditorCanvas: React.FC<EditorCanvasProps> = ({ socket }) => {
         addTextNode(position);
       }
     },
-    [project, addClassNode, addTextNode]
+    [screenToFlowPosition, addClassNode, addTextNode]
   );
 
   // Clic en canvas
@@ -136,17 +135,15 @@ const EditorCanvas: React.FC<EditorCanvasProps> = ({ socket }) => {
       setContextMenu(null);
       setNodeContextMenu(null);
       if (selectedTool === 'class' && reactFlowWrapper.current) {
-        const reactFlowBounds = reactFlowWrapper.current.getBoundingClientRect();
-        const position = project({
-          x: event.clientX - reactFlowBounds.left,
-          y: event.clientY - reactFlowBounds.top,
+        const position = screenToFlowPosition({
+          x: event.clientX,
+          y: event.clientY,
         });
         addClassNode(position);
       } else if (selectedTool === 'text' && reactFlowWrapper.current) {
-        const reactFlowBounds = reactFlowWrapper.current.getBoundingClientRect();
-        const position = project({
-          x: event.clientX - reactFlowBounds.left,
-          y: event.clientY - reactFlowBounds.top,
+        const position = screenToFlowPosition({
+          x: event.clientX,
+          y: event.clientY,
         });
         addTextNode(position);
         setSelectedTool('select');
@@ -162,7 +159,7 @@ const EditorCanvas: React.FC<EditorCanvasProps> = ({ socket }) => {
         setMousePos(null);
       }
     },
-    [selectedTool, project, addClassNode, addTextNode, setSelectedTool, connectingSourceNodeId, setConnectingSourceNodeId, setHoveredNodeId]
+    [selectedTool, screenToFlowPosition, addClassNode, addTextNode, setSelectedTool, connectingSourceNodeId, setConnectingSourceNodeId, setHoveredNodeId]
   );
 
   // Clic derecho en una relación
@@ -292,7 +289,7 @@ const EditorCanvas: React.FC<EditorCanvasProps> = ({ socket }) => {
     }
 
     // Transmitir posición del cursor a los colaboradores
-    const flowCoords = project({ x: rawX, y: rawY });
+    const flowCoords = screenToFlowPosition({ x: e.clientX, y: e.clientY });
     broadcastCursor(flowCoords.x, flowCoords.y);
   };
 

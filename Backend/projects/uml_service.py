@@ -308,6 +308,9 @@ def _parse_xmi(xml_content: str) -> dict:
         return c or 'string'
 
     # Pre-indexar IDs y tipos
+    diagram_subjects = set()
+    referenced_assoc_classes = set()
+
     for elem in root.iter():
         tag = _clean_tag(elem.tag)
         xmi_type = elem.attrib.get('{http://schema.omg.org/spec/XMI/2.1}type') or elem.attrib.get('xmi:type') or ''
@@ -328,6 +331,23 @@ def _parse_xmi(xml_content: str) -> dict:
                 if ptype:
                     ea_attribute_types[eid] = ptype
 
+        if tag == 'element':
+            subj = elem.attrib.get('subject')
+            if subj:
+                diagram_subjects.add(subj)
+
+        if tag == 'connector':
+            ext_prop = elem.find('extendedProperties')
+            if ext_prop is not None:
+                ac = ext_prop.attrib.get('associationclass')
+                if ac:
+                    referenced_assoc_classes.add(ac)
+            prop = elem.find('properties')
+            if prop is not None:
+                ac = prop.attrib.get('associationclass')
+                if ac:
+                    referenced_assoc_classes.add(ac)
+
     # Extraer clases
     for elem in root.iter():
         tag = _clean_tag(elem.tag)
@@ -340,6 +360,12 @@ def _parse_xmi(xml_content: str) -> dict:
             cls_id = elem.attrib.get('{http://schema.omg.org/spec/XMI/2.1}id') or elem.attrib.get('xmi:id') or elem.attrib.get('id')
 
             if cls_name and cls_id:
+                # Filtrar elementos huérfanos que no pertenecen al diagrama
+                is_in_diagram = (cls_id in diagram_subjects) or (cls_id in referenced_assoc_classes)
+                if len(diagram_subjects) > 0 and not is_in_diagram:
+                    if cls_name.lower() == 'class1':
+                        continue
+
                 id_to_name[cls_id] = cls_name
                 attrs = []
                 methods = []
@@ -425,15 +451,22 @@ def _parse_xmi(xml_content: str) -> dict:
             agg1 = src_t.attrib.get('aggregation', 'none') if src_t is not None else 'none'
             agg2 = tgt_t.attrib.get('aggregation', 'none') if tgt_t is not None else 'none'
 
+            ext_prop = elem.find('extendedProperties')
+            assoc_class_id = (ext_prop.attrib.get('associationclass') if ext_prop is not None else '') or (prop_el.attrib.get('associationclass') if prop_el is not None else '')
+
             rel_type = 'association'
             if ea_type == 'Generalization':
                 rel_type = 'generalization'
             elif ea_type == 'Dependency':
                 rel_type = 'dependency'
+            elif ea_type == 'AssociationClass' or subtype == 'Class' or bool(assoc_class_id):
+                rel_type = 'associationClass'
             elif agg2 == 'composite' or agg1 == 'composite' or subtype == 'Strong':
                 rel_type = 'composition'
             elif agg2 == 'shared' or agg1 == 'shared' or subtype == 'Weak':
                 rel_type = 'aggregation'
+
+            assoc_class_name = id_to_name.get(assoc_class_id) if assoc_class_id else None
 
             final_src_id = src_id
             final_tgt_id = tgt_id
@@ -453,6 +486,7 @@ def _parse_xmi(xml_content: str) -> dict:
                 'type': rel_type,
                 'sourceMultiplicity': final_m1,
                 'targetMultiplicity': final_m2,
+                'associationClassName': assoc_class_name,
             })
 
     # Mapear nombres a relaciones
@@ -471,6 +505,7 @@ def _parse_xmi(xml_content: str) -> dict:
                     'sourceMultiplicity': rel.get('sourceMultiplicity', ''),
                     'targetMultiplicity': rel.get('targetMultiplicity', ''),
                     'label': '',
+                    'associationClassName': rel.get('associationClassName'),
                 })
 
     # Asignar posiciones en cuadrícula

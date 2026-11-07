@@ -241,11 +241,16 @@ export function parseXmi(xmlText: string): ParsedUmlResult {
 
   // 2. Extraer coordenadas del diagrama si existen en extensiones de Enterprise Architect
   const elementPositions: Record<string, { x: number; y: number }> = {};
+  const diagramSubjectIds = new Set<string>();
+
   for (const el of allElements) {
     const tag = (el.localName || el.tagName).toLowerCase();
     if (tag === 'element' || tag === 'diagramelement') {
       const geometry = getSafeAttr(el, 'geometry');
       const subject = getSafeAttr(el, 'subject');
+      if (subject) {
+        diagramSubjectIds.add(subject);
+      }
       if (geometry && subject) {
         const leftMatch = geometry.match(/Left=(\d+)/i);
         const topMatch = geometry.match(/Top=(\d+)/i);
@@ -256,6 +261,18 @@ export function parseXmi(xmlText: string): ParsedUmlResult {
           };
         }
       }
+    }
+  }
+
+  // Pre-escanear associationclasses referenciadas en conectores
+  const referencedAssocClassIds = new Set<string>();
+  for (const el of allElements) {
+    if ((el.localName || el.tagName).toLowerCase() === 'connector') {
+      const extProp = el.querySelector('extendedProperties') || el.querySelector('extendedproperties');
+      const prop = el.querySelector('properties');
+      const acId = (extProp ? getSafeAttr(extProp, 'associationclass') : '') ||
+                   (prop ? getSafeAttr(prop, 'associationclass') : '');
+      if (acId) referencedAssocClassIds.add(acId);
     }
   }
 
@@ -445,6 +462,15 @@ export function parseXmi(xmlText: string): ParsedUmlResult {
       }
     }
 
+    // Si el diagrama tiene elementos específicos definidos y esta clase no está en el diagrama ni es clase de asociación
+    const isInDiagram = diagramSubjectIds.has(rawId) || referencedAssocClassIds.has(rawId);
+    if (diagramSubjectIds.size > 0 && !isInDiagram) {
+      // Ignorar clases huérfanas sin posición que sean plantillas como Class1 o estén vacías
+      if (name.toLowerCase() === 'class1' || (attributes.length === 0 && methods.length === 0)) {
+        continue;
+      }
+    }
+
     const parsedClass: ParsedUmlClass = {
       id: rawId,
       name,
@@ -453,6 +479,23 @@ export function parseXmi(xmlText: string): ParsedUmlResult {
       methods,
       position: elementPositions[rawId],
     };
+
+    // Deduplicación inteligente por nombre (ej. dos clases "Detalle")
+    const existingIndex = classes.findIndex(
+      (c) => c.name.toLowerCase().trim() === name.toLowerCase().trim()
+    );
+    if (existingIndex !== -1) {
+      const existing = classes[existingIndex];
+      const existingInDiagram = existing.id
+        ? diagramSubjectIds.has(existing.id) || referencedAssocClassIds.has(existing.id)
+        : false;
+      // Si la nueva está en el diagrama y la vieja no, o si la nueva tiene más atributos, reemplazar
+      if ((isInDiagram && !existingInDiagram) || attributes.length > existing.attributes.length) {
+        classes[existingIndex] = parsedClass;
+        idToClass[rawId] = parsedClass;
+      }
+      continue;
+    }
 
     classes.push(parsedClass);
     idToClass[rawId] = parsedClass;
@@ -515,17 +558,26 @@ export function parseXmi(xmlText: string): ParsedUmlResult {
         const agg2 = targetTypeEl ? getSafeAttr(targetTypeEl, 'aggregation') : 'none';
         const subtype = propEl ? getSafeAttr(propEl, 'subtype') : '';
 
+        const extPropEl = el.querySelector('extendedProperties') || el.querySelector('extendedproperties');
+        const assocClassId = (extPropEl ? getSafeAttr(extPropEl, 'associationclass') : '') ||
+                             (propEl ? getSafeAttr(propEl, 'associationclass') : '');
+
         let relType: UmlRelationType = 'association';
         if (eaType === 'Generalization') {
           relType = 'generalization';
         } else if (eaType === 'Dependency') {
           relType = 'dependency';
-        } else if (eaType === 'AssociationClass') {
+        } else if (eaType === 'AssociationClass' || subtype === 'Class' || Boolean(assocClassId)) {
           relType = 'associationClass';
         } else if (agg2 === 'composite' || agg1 === 'composite' || subtype === 'Strong') {
           relType = 'composition';
         } else if (agg2 === 'shared' || agg1 === 'shared' || subtype === 'Weak') {
           relType = 'aggregation';
+        }
+
+        let assocClassName: string | undefined = undefined;
+        if (assocClassId && idToName[assocClassId]) {
+          assocClassName = idToName[assocClassId];
         }
 
         let finalSource = sourceName;
@@ -560,6 +612,7 @@ export function parseXmi(xmlText: string): ParsedUmlResult {
             sourceMultiplicity: finalSourceMult,
             targetMultiplicity: finalTargetMult,
             label,
+            associationClassName: assocClassName,
           });
         }
       }
