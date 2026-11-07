@@ -199,13 +199,13 @@ export const EditorHeader: React.FC<EditorHeaderProps> = ({
           type="button"
           className={`editor-ai-btn editor-history-btn ${isAuditHistoryOpen ? 'active' : ''}`}
           onClick={onToggleAuditHistory}
-          title="Ver registro cronológico de cambios de cada colaborador (CU-12)"
+          title="Ver registro cronológico de cambios de cada colaborador"
         >
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <circle cx="12" cy="12" r="10" />
             <polyline points="12 6 12 12 16 14" />
           </svg>
-          <span>Historial (CU-12)</span>
+          <span>Historial</span>
         </button>
 
         <div className="editor-brand-divider"></div>

@@ -23,9 +23,12 @@ export interface TeamAiMessage {
   role: 'user' | 'assistant';
   senderName: string;
   senderColor: string;
+  replyToUser?: string;
   text: string;
   actions?: any[];
   timestamp?: string;
+  provider?: string;
+  model?: string;
 }
 
 const COLLAB_COLORS = ['#2563eb', '#7c3aed', '#db2777', '#ea580c', '#16a34a', '#0891b2', '#d97706'];
@@ -118,8 +121,11 @@ export function useDiagramSocket(projectId: number | null) {
               role: payload.role || 'user',
               senderName: payload.senderName || 'Colaborador',
               senderColor: payload.senderColor || '#2563eb',
+              replyToUser: payload.replyToUser || payload.reply_to_user,
               text: payload.text || '',
               actions: payload.actions || [],
+              provider: payload.provider,
+              model: payload.model,
               timestamp: payload.timestamp || new Date().toISOString()
             };
 
@@ -135,6 +141,36 @@ export function useDiagramSocket(projectId: number | null) {
                 new CustomEvent('apply_ai_actions', { detail: payload.actions })
               );
             }
+            return;
+          }
+
+          // 3.1 Historial inicial de mensajes de la sala recibido vía WebSocket al conectar
+          if (payload.type === 'chat_history') {
+            const rawMessages = payload.messages || [];
+            const mapped: TeamAiMessage[] = rawMessages.map((m: any) => ({
+              id: m.id ? (String(m.id).startsWith('msg_') ? String(m.id) : `msg_db_${m.id}`) : `msg_db_${Math.random()}`,
+              role: m.role || 'user',
+              senderName: m.sender_name || m.senderName || 'Colaborador',
+              senderColor: m.sender_color || m.senderColor || '#2563eb',
+              replyToUser: m.reply_to_user || m.replyToUser,
+              text: m.text || '',
+              actions: m.actions || [],
+              timestamp: m.timestamp || m.created_at || new Date().toISOString()
+            }));
+
+            setTeamMessages((prev) => {
+              if (prev.length === 0) return mapped;
+              const existingIds = new Set(prev.map((p) => p.id));
+              const missing = mapped.filter((m) => !existingIds.has(m.id));
+              if (missing.length === 0) return prev;
+              const combined = [...prev, ...missing];
+              combined.sort((a, b) => {
+                const ta = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+                const tb = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+                return ta - tb;
+              });
+              return combined;
+            });
             return;
           }
 
@@ -303,22 +339,42 @@ export function useDiagramSocket(projectId: number | null) {
     [username]
   );
 
-  // CU-11: Enviar mensaje colaborativo al canal compartido con la IA Senior
+  // CU-11: Enviar mensaje colaborativo al canal compartido con la IA Senior (soporta modo local/cloud)
   const sendTeamAiMessage = useCallback(
-    (message: string, diagramContext: any) => {
+    (message: string, diagramContext: any, provider: string = 'auto', localModel: string = 'llama3.2:3b') => {
       if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
         return false;
       }
 
+      const uniqueId = `msg_u_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+      const nowIso = new Date().toISOString();
+
+      // Renderizado optimista inmediato en la interfaz para que el mensaje del usuario nunca desaparezca
+      const optimisticMsg: TeamAiMessage = {
+        id: uniqueId,
+        role: 'user',
+        senderName: username,
+        senderColor: userColorRef.current,
+        text: message,
+        timestamp: nowIso
+      };
+      setTeamMessages((prev) => {
+        if (prev.some((m) => m.id === uniqueId)) return prev;
+        return [...prev, optimisticMsg];
+      });
+
       socketRef.current.send(
         JSON.stringify({
           type: 'team_ai_message',
+          id: uniqueId,
           senderId: clientIdRef.current,
           senderName: username,
           senderColor: userColorRef.current,
           message,
           diagramContext,
-          timestamp: new Date().toISOString()
+          provider,
+          localModel,
+          timestamp: nowIso
         })
       );
       return true;

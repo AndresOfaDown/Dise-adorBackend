@@ -103,7 +103,23 @@ class SessionService with ChangeNotifier {
         await fetchProjects();
         return true;
       } else {
-        _errorMessage = data['error'] ?? data['detail'] ?? data['message'] ?? 'Credenciales incorrectas';
+        String msg = 'Credenciales incorrectas';
+        if (data is Map) {
+          if (data['error'] != null) {
+            msg = data['error'].toString();
+          } else if (data['detail'] != null) {
+            msg = data['detail'].toString();
+          } else if (data['message'] != null) {
+            msg = data['message'].toString();
+          } else if (data['non_field_errors'] != null) {
+            final nfe = data['non_field_errors'];
+            msg = nfe is List ? nfe.join(', ') : nfe.toString();
+          } else if (data.isNotEmpty) {
+            final firstVal = data.values.first;
+            msg = firstVal is List ? firstVal.join(', ') : firstVal.toString();
+          }
+        }
+        _errorMessage = msg;
         _isLoading = false;
         notifyListeners();
         return false;

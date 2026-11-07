@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
+from django.db.models import Q
 
 Usuario = get_user_model()
 
@@ -39,23 +40,23 @@ class RegisterSerializer(serializers.ModelSerializer):
 
 
 class LoginSerializer(serializers.Serializer):
-    email = serializers.EmailField()
+    email = serializers.CharField(required=False, allow_blank=True)
+    username = serializers.CharField(required=False, allow_blank=True)
     password = serializers.CharField(write_only=True, style={'input_type': 'password'})
 
     def validate(self, attrs):
-        email = attrs.get('email', '').strip().lower()
+        identifier = (attrs.get('email') or attrs.get('username') or '').strip().lower()
         password = attrs.get('password', '')
 
-        if not email or not password:
-            raise serializers.ValidationError("Debe ingresar correo y contraseña.")
+        if not identifier or not password:
+            raise serializers.ValidationError("Debe ingresar usuario/correo y contraseña.")
 
-        try:
-            user = Usuario.objects.get(email__iexact=email)
-        except Usuario.DoesNotExist:
-            raise serializers.ValidationError("Credenciales incorrectas. Verifique su correo y contraseña.")
+        user = Usuario.objects.filter(Q(email__iexact=identifier) | Q(username__iexact=identifier)).first()
+        if not user:
+            raise serializers.ValidationError("Credenciales incorrectas. Verifique su usuario/correo y contraseña.")
 
         if not user.check_password(password):
-            raise serializers.ValidationError("Credenciales incorrectas. Verifique su correo y contraseña.")
+            raise serializers.ValidationError("Credenciales incorrectas. Verifique su usuario/correo y contraseña.")
 
         if not user.is_active:
             raise serializers.ValidationError("Esta cuenta se encuentra inactiva.")

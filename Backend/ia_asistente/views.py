@@ -7,8 +7,29 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import AllowAny
 from .models import MensajeColaborativoIA
-from .senior_service import generate_senior_ai_response
+from .senior_service import generate_senior_ai_response, check_ollama_status
 from projects.models import Proyecto
+from config.mongo_service import mongo_log_ai_message
+
+
+class IAStatusAPIView(APIView):
+    """
+    Informa el estado de disponibilidad de IA Local (Ollama) y Cloud (Gemini)
+    para la selección y telemetría en el frontend y móvil.
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        ollama_info = check_ollama_status()
+        gemini_configured = bool(os.environ.get('GEMINI_API_KEY', ''))
+        return Response({
+            'success': True,
+            'ollama_available': ollama_info.get('available', False),
+            'local_models': ollama_info.get('models', []),
+            'default_local_model': ollama_info.get('default_model', 'llama3.2:3b'),
+            'gemini_available': gemini_configured,
+            'active_provider_recommendation': 'local' if ollama_info.get('available') else 'cloud'
+        }, status=status.HTTP_200_OK)
 
 class AnalizarImagenDiagramaAPIView(APIView):
     permission_classes = [AllowAny]
@@ -166,6 +187,8 @@ class AsistenteChatAPIView(APIView):
         sender_color = request.data.get('sender_color') or '#2563eb'
         project_id = request.data.get('project_id') or request.data.get('projectId')
         user_gemini_key = request.data.get('gemini_api_key', '').strip()
+        provider = request.data.get('provider', 'auto')
+        local_model = request.data.get('local_model', 'llama3.2:3b')
 
         if not message:
             return Response(
@@ -192,20 +215,22 @@ class AsistenteChatAPIView(APIView):
             except Exception as e:
                 print(f"Error consultando historial de sala: {e}")
 
-        # Generar respuesta con el servicio Senior
+        # Generar respuesta con el servicio Senior (híbrido Local / Cloud)
         result = generate_senior_ai_response(
             sender_name=sender_name,
             user_message=message,
             diagram_context=diagram_context,
             recent_history=recent_history,
-            api_key=user_gemini_key
+            api_key=user_gemini_key,
+            preferred_provider=provider,
+            local_model=local_model
         )
 
         # Si tenemos proyecto, persistir el mensaje del usuario y la respuesta de la IA
         if proyecto:
             try:
                 # Guardar mensaje usuario
-                MensajeColaborativoIA.objects.create(
+                u_msg = MensajeColaborativoIA.objects.create(
                     proyecto=proyecto,
                     sender_name=sender_name,
                     sender_color=sender_color,
@@ -213,8 +238,19 @@ class AsistenteChatAPIView(APIView):
                     text=message,
                     actions=[]
                 )
+                # Persistencia dual NoSQL (MongoDB colección sesiones_ia_colaborativa)
+                mongo_log_ai_message(
+                    project_id=proyecto.id,
+                    sender_name=sender_name,
+                    sender_color=sender_color,
+                    role='user',
+                    text=message,
+                    actions=[],
+                    provider=provider
+                )
+
                 # Guardar mensaje IA
-                MensajeColaborativoIA.objects.create(
+                ai_msg = MensajeColaborativoIA.objects.create(
                     proyecto=proyecto,
                     sender_name='IA Senior',
                     sender_color='#10b981',
@@ -222,6 +258,61 @@ class AsistenteChatAPIView(APIView):
                     text=result['reply'],
                     actions=result.get('actions', [])
                 )
+                # Persistencia dual NoSQL (MongoDB colección sesiones_ia_colaborativa)
+                mongo_log_ai_message(
+                    project_id=proyecto.id,
+                    sender_name='IA Senior',
+                    sender_color='#10b981',
+                    role='assistant',
+                    text=result['reply'],
+                    actions=result.get('actions', []),
+                    provider=result.get('provider', 'cloud'),
+                    reply_to_user=sender_name
+                )
+
+                # Re-transmitir a la sala WebSocket para que todos los usuarios lo vean en tiempo real
+                try:
+                    from channels.layers import get_channel_layer
+                    from asgiref.sync import async_to_sync
+                    channel_layer = get_channel_layer()
+                    if channel_layer:
+                        room_name = f'diagrama_{proyecto.id}'
+                        async_to_sync(channel_layer.group_send)(
+                            room_name,
+                            {
+                                'type': 'relay_message',
+                                'data': {
+                                    'type': 'team_ai_message',
+                                    'id': f"msg_u_{u_msg.id}",
+                                    'role': 'user',
+                                    'senderName': sender_name,
+                                    'senderColor': sender_color,
+                                    'text': message,
+                                    'timestamp': u_msg.created_at.isoformat()
+                                }
+                            }
+                        )
+                        async_to_sync(channel_layer.group_send)(
+                            room_name,
+                            {
+                                'type': 'relay_message',
+                                'data': {
+                                    'type': 'team_ai_message',
+                                    'id': f"msg_ai_{ai_msg.id}",
+                                    'role': 'assistant',
+                                    'senderName': 'IA Senior',
+                                    'senderColor': '#10b981',
+                                    'replyToUser': sender_name,
+                                    'text': result['reply'],
+                                    'actions': result.get('actions', []),
+                                    'provider': result.get('provider', 'cloud'),
+                                    'model': result.get('model', 'gemini'),
+                                    'timestamp': ai_msg.created_at.isoformat()
+                                }
+                            }
+                        )
+                except Exception as ws_err:
+                    print(f"Error retransmitiendo por WebSocket desde REST: {ws_err}")
             except Exception as e:
                 print(f"Error guardando mensajes colaborativos en BD: {e}")
 
@@ -229,13 +320,15 @@ class AsistenteChatAPIView(APIView):
             'success': True,
             'reply': result['reply'],
             'actions': result.get('actions', []),
-            'sender_name': 'IA Senior'
+            'sender_name': 'IA Senior',
+            'provider': result.get('provider', 'cloud'),
+            'model': result.get('model', 'gemini')
         })
 
 
 class HistorialMensajesIAAPIView(APIView):
     """
-    Obtiene el historial de mensajes de la sala colaborativa (para catch-up y persistencia).
+    Obtiene el historial completo de mensajes de la sala colaborativa (para catch-up y sincronización en vivo).
     """
     permission_classes = [AllowAny]
 
@@ -245,19 +338,28 @@ class HistorialMensajesIAAPIView(APIView):
             if not proyecto:
                 return Response({'success': False, 'error': 'Proyecto no encontrado'}, status=status.HTTP_404_NOT_FOUND)
 
-            mensajes = MensajeColaborativoIA.objects.filter(proyecto=proyecto).order_by('created_at')[:50]
-            data = [
-                {
-                    'id': m.id,
+            total = MensajeColaborativoIA.objects.filter(proyecto=proyecto).count()
+            if total > 300:
+                mensajes = list(MensajeColaborativoIA.objects.filter(proyecto=proyecto).order_by('-created_at')[:300])
+                mensajes.reverse()
+            else:
+                mensajes = list(MensajeColaborativoIA.objects.filter(proyecto=proyecto).order_by('created_at'))
+
+            data = []
+            last_user = None
+            for m in mensajes:
+                if m.role == 'user':
+                    last_user = m.sender_name
+                data.append({
+                    'id': f"msg_db_{m.id}",
                     'role': m.role,
                     'sender_name': m.sender_name,
                     'sender_color': m.sender_color,
+                    'reply_to_user': last_user if m.role == 'assistant' else None,
                     'text': m.text,
-                    'actions': m.actions,
+                    'actions': m.actions or [],
                     'created_at': m.created_at.isoformat()
-                }
-                for m in mensajes
-            ]
+                })
             return Response({'success': True, 'messages': data})
         except Exception as e:
             return Response({'success': False, 'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

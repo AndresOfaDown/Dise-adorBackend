@@ -135,47 +135,34 @@ export const DiagramHistoryAuditPanel: React.FC<DiagramHistoryAuditPanelProps> =
   return (
     <div className="diagram-audit-panel-content">
       <div className="audit-history-container">
-        {/* Cabecera Informativa de Auditoría */}
+        {/* Cabecera Informativa de Auditoría Compacta */}
         <div className="audit-header-summary">
           <div className="audit-summary-title">
             <span className="audit-live-dot"></span>
-            <strong>Registro Cronológico de Modificaciones</strong>
+            <span>Historial Diagrama</span>
+            <span className="audit-kpi-chip">{historyItems.length} cambios</span>
+            <span className="audit-kpi-chip">{uniqueUsers.length} autores</span>
           </div>
-          <p className="audit-summary-sub">
-            Auditoría en tiempo real de cada colaborador y cambios aplicados al modelo UML.
-          </p>
-          <div className="audit-kpi-row">
-            <div className="audit-kpi-item">
-              <span className="kpi-num">{historyItems.length}</span>
-              <span className="kpi-label">Cambios</span>
-            </div>
-            <div className="audit-kpi-item">
-              <span className="kpi-num">{uniqueUsers.length}</span>
-              <span className="kpi-label">Autores</span>
-            </div>
-            <div className="audit-kpi-item refresh-item">
-              <button
-                type="button"
-                className="audit-refresh-btn"
-                onClick={fetchAuditHistory}
-                disabled={isLoading}
-                title="Actualizar registro"
-              >
-                <svg
-                  width="13"
-                  height="13"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2.5"
-                  className={isLoading ? 'spinning' : ''}
-                >
-                  <path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15" />
-                </svg>
-                <span>Refrescar</span>
-              </button>
-            </div>
-          </div>
+          <button
+            type="button"
+            className="audit-refresh-btn-compact"
+            onClick={fetchAuditHistory}
+            disabled={isLoading}
+            title="Actualizar registro"
+          >
+            <svg
+              width="11"
+              height="11"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.5"
+              className={isLoading ? 'spinning' : ''}
+            >
+              <path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15" />
+            </svg>
+            <span>Refrescar</span>
+          </button>
         </div>
 
         {/* Filtros: por usuario y tipo de acción */}

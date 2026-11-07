@@ -1,5 +1,8 @@
 import json
 import asyncio
+import time
+import uuid
+from datetime import datetime
 from urllib.parse import parse_qs
 from collections import defaultdict
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
@@ -7,6 +10,7 @@ from channels.db import database_sync_to_async
 from .models import Proyecto, Diagrama
 from ia_asistente.models import MensajeColaborativoIA
 from ia_asistente.senior_service import generate_senior_ai_response
+from config.mongo_service import mongo_save_diagram, mongo_log_ai_message
 
 # Registro global de presencia por sala: room_name -> { channel_name: { 'username': ..., 'color': ..., 'id': ... } }
 ROOM_COLLABORATORS = defaultdict(dict)
@@ -146,14 +150,18 @@ class DiagramaConsumer(AsyncJsonWebsocketConsumer):
             sender_color = content.get('senderColor', self.user_color)
             message_text = content.get('message', '').strip()
             diagram_context = content.get('diagramContext', {})
+            provider = content.get('provider', 'auto')
+            local_model = content.get('localModel', 'llama3.2:3b')
 
             if not message_text:
                 return
 
             # 1. Broadcast inmediato a toda la sala del mensaje del usuario
+            import time, uuid
+            msg_unique_id = content.get('id') or f"msg_u_{int(time.time()*1000)}_{uuid.uuid4().hex[:6]}"
             user_msg_payload = {
                 'type': 'team_ai_message',
-                'id': f"msg_user_{content.get('id', self.channel_name)}",
+                'id': msg_unique_id,
                 'role': 'user',
                 'senderName': sender_name,
                 'senderColor': sender_color,
@@ -196,11 +204,13 @@ class DiagramaConsumer(AsyncJsonWebsocketConsumer):
                 self.process_and_broadcast_ai_response(
                     sender_name=sender_name,
                     message_text=message_text,
-                    diagram_context=diagram_context
+                    diagram_context=diagram_context,
+                    provider=provider,
+                    local_model=local_model
                 )
             )
 
-    async def process_and_broadcast_ai_response(self, sender_name, message_text, diagram_context):
+    async def process_and_broadcast_ai_response(self, sender_name, message_text, diagram_context, provider='auto', local_model='llama3.2:3b'):
         try:
             # Obtener historial reciente de la BD
             history = await self.get_recent_history(self.project_id)
@@ -211,11 +221,15 @@ class DiagramaConsumer(AsyncJsonWebsocketConsumer):
                 sender_name=sender_name,
                 user_message=message_text,
                 diagram_context=diagram_context,
-                recent_history=history
+                recent_history=history,
+                preferred_provider=provider,
+                local_model=local_model
             )
 
             reply_text = ai_result.get('reply', '')
             actions = ai_result.get('actions', [])
+            used_provider = ai_result.get('provider', 'cloud')
+            used_model = ai_result.get('model', 'gemini')
 
             # Guardar respuesta IA en BD
             saved_msg = await self.persist_team_message(
@@ -224,8 +238,13 @@ class DiagramaConsumer(AsyncJsonWebsocketConsumer):
                 sender_color='#10b981',
                 role='assistant',
                 text=reply_text,
-                actions=actions
+                actions=actions,
+                reply_to_user=sender_name
             )
+
+            now_iso = datetime.now().isoformat()
+            msg_ai_id = f"msg_ai_{saved_msg.id}" if saved_msg else f"msg_ai_{int(time.time()*1000)}_{uuid.uuid4().hex[:4]}"
+            msg_timestamp = saved_msg.created_at.isoformat() if saved_msg else now_iso
 
             # Retransmitir respuesta de la IA a toda la sala
             await self.channel_layer.group_send(
@@ -234,13 +253,16 @@ class DiagramaConsumer(AsyncJsonWebsocketConsumer):
                     'type': 'relay_message',
                     'data': {
                         'type': 'team_ai_message',
-                        'id': f"msg_ai_{saved_msg.id if saved_msg else 'temp'}",
+                        'id': msg_ai_id,
                         'role': 'assistant',
                         'senderName': 'IA Senior',
                         'senderColor': '#10b981',
+                        'replyToUser': sender_name,
                         'text': reply_text,
                         'actions': actions,
-                        'timestamp': None
+                        'provider': used_provider,
+                        'model': used_model,
+                        'timestamp': msg_timestamp
                     }
                 }
             )
@@ -308,6 +330,17 @@ class DiagramaConsumer(AsyncJsonWebsocketConsumer):
                 diagrama.viewport = viewport
             diagrama.save()
             proyecto.save() # actualiza last_edited_at
+
+            # Persistencia dual NoSQL (MongoDB colección diagramas_uml)
+            username = getattr(self, 'username', 'Colaborador')
+            mongo_save_diagram(
+                project_id=project_id,
+                package_base=proyecto.package_base,
+                nodes=diagrama.nodes,
+                edges=diagrama.edges,
+                viewport=diagrama.viewport,
+                editor_name=username
+            )
         except Exception as e:
             print(f"Error persistiendo diagrama colaborativo {project_id}: {e}")
 
@@ -315,16 +348,17 @@ class DiagramaConsumer(AsyncJsonWebsocketConsumer):
     def persist_project_name(self, project_id, name):
         try:
             Proyecto.objects.filter(id=project_id).update(package_base=name)
+            mongo_save_diagram(project_id=project_id, package_base=name, editor_name=getattr(self, 'username', 'Colaborador'))
         except Exception as e:
             print(f"Error actualizando nombre de proyecto {project_id}: {e}")
 
     @database_sync_to_async
-    def persist_team_message(self, project_id, sender_name, sender_color, role, text, actions):
+    def persist_team_message(self, project_id, sender_name, sender_color, role, text, actions, reply_to_user=None):
         try:
             proyecto = Proyecto.objects.filter(id=project_id).first()
             if not proyecto:
                 return None
-            return MensajeColaborativoIA.objects.create(
+            msg = MensajeColaborativoIA.objects.create(
                 proyecto=proyecto,
                 sender_name=sender_name,
                 sender_color=sender_color,
@@ -332,6 +366,17 @@ class DiagramaConsumer(AsyncJsonWebsocketConsumer):
                 text=text,
                 actions=actions or []
             )
+            # Persistencia dual NoSQL (MongoDB colección sesiones_ia_colaborativa)
+            mongo_log_ai_message(
+                project_id=project_id,
+                sender_name=sender_name,
+                sender_color=sender_color,
+                role=role,
+                text=text,
+                actions=actions or [],
+                reply_to_user=reply_to_user
+            )
+            return msg
         except Exception as e:
             print(f"Error guardando mensaje de equipo en BD: {e}")
             return None
@@ -379,19 +424,28 @@ class DiagramaConsumer(AsyncJsonWebsocketConsumer):
             proyecto = Proyecto.objects.filter(id=project_id).first()
             if not proyecto:
                 return []
-            mensajes = MensajeColaborativoIA.objects.filter(proyecto=proyecto).order_by('created_at')[:50]
-            return [
-                {
-                    'id': str(m.id),
+            total = MensajeColaborativoIA.objects.filter(proyecto=proyecto).count()
+            if total > 300:
+                mensajes = list(MensajeColaborativoIA.objects.filter(proyecto=proyecto).order_by('-created_at')[:300])
+                mensajes.reverse()
+            else:
+                mensajes = list(MensajeColaborativoIA.objects.filter(proyecto=proyecto).order_by('created_at'))
+            data = []
+            last_user = None
+            for m in mensajes:
+                if m.role == 'user':
+                    last_user = m.sender_name
+                data.append({
+                    'id': f"msg_db_{m.id}",
                     'role': m.role,
                     'sender_name': m.sender_name,
                     'sender_color': m.sender_color,
+                    'reply_to_user': last_user if m.role == 'assistant' else None,
                     'text': m.text,
                     'actions': m.actions or [],
                     'timestamp': m.created_at.isoformat()
-                }
-                for m in mensajes
-            ]
+                })
+            return data
         except Exception as e:
             print(f"Error cargando historial de chat {project_id}: {e}")
             return []

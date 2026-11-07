@@ -7,6 +7,7 @@ from django.http import HttpResponse
 from .models import Proyecto, Diagrama, HistorialCambioDiagrama
 from .serializers import ProyectoSerializer, ProyectoCreateSerializer, DiagramaSerializer
 from .uml_service import export_diagram_to_xmi, export_diagram_to_puml, parse_uml_file
+from config.mongo_service import mongo_save_diagram, mongo_log_audit_event, mongo_get_stats
 
 from django.db.models import Q
 from django.contrib.auth import get_user_model
@@ -73,6 +74,17 @@ class DiagramaDetailAPIView(APIView):
         if 'package_base' in request.data:
             proyecto.package_base = request.data['package_base']
         proyecto.save()
+
+        # Persistencia dual NoSQL (MongoDB colección diagramas_uml)
+        editor_name = request.user.username if (request.user and request.user.is_authenticated) else 'Colaborador'
+        mongo_save_diagram(
+            project_id=project_id,
+            package_base=proyecto.package_base,
+            nodes=nodes,
+            edges=edges,
+            viewport=viewport,
+            editor_name=editor_name
+        )
 
         return Response({
             'message': 'Diagrama guardado correctamente',
@@ -353,6 +365,18 @@ class HistorialCambioDiagramaAPIView(APIView):
             detalles=detalles
         )
 
+        # Persistencia dual NoSQL (MongoDB colección auditoria_cambios)
+        mongo_log_audit_event(
+            project_id=project_id,
+            usuario_nombre=usuario_nombre,
+            usuario_color=usuario_color,
+            tipo_accion=tipo_accion,
+            entidad_afectada=entidad_afectada,
+            descripcion=descripcion,
+            detalles=detalles,
+            created_at=cambio.created_at
+        )
+
         # Difundir a la sala WebSocket en vivo
         try:
             from asgiref.sync import async_to_sync
@@ -394,5 +418,16 @@ class HistorialCambioDiagramaAPIView(APIView):
                 'created_at': cambio.created_at.isoformat()
             }
         }, status=status.HTTP_201_CREATED)
+
+
+class NoSqlStatusAPIView(APIView):
+    """
+    Diagnóstico y estado en tiempo real de MongoDB NoSQL para evaluación docente.
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        stats = mongo_get_stats()
+        return Response(stats)
 
 

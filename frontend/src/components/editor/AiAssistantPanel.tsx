@@ -18,7 +18,7 @@ interface AiAssistantPanelProps {
   setTeamMessages: React.Dispatch<React.SetStateAction<TeamAiMessage[]>>;
   isAiTyping: boolean;
   aiTypingFor: string | null;
-  onSendTeamMessage: (message: string, diagramContext: any) => boolean;
+  onSendTeamMessage: (message: string, diagramContext: any, provider?: string, localModel?: string) => boolean;
   projectId: number | null;
   activeTab?: 'chat' | 'history';
   onSwitchTab?: (tab: 'chat' | 'history') => void;
@@ -39,6 +39,11 @@ export const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({
   const { user } = useAuthStore();
   const [inputText, setInputText] = useState('');
   const [isListening, setIsListening] = useState(false);
+  const [aiProvider, setAiProvider] = useState<'auto' | 'local' | 'cloud'>('auto');
+  const [ollamaInfo, setOllamaInfo] = useState<{ available: boolean; models: string[]; defaultModel?: string }>({
+    available: false,
+    models: [],
+  });
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const recognitionRef = useRef<any>(null);
@@ -53,22 +58,51 @@ export const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({
 
   const currentUsername = user?.username || user?.nombre || user?.email?.split('@')[0] || 'Tú';
 
-  // Cargar historial previo de la base de datos al abrir el panel por primera vez
+  // Cargar estado del motor de IA (Ollama local / Gemini Cloud)
   useEffect(() => {
-    if (projectId && teamMessages.length === 0) {
+    apiClient.get('/api/ia/status/')
+      .then((res) => {
+        if (res.data?.success) {
+          setOllamaInfo({
+            available: !!res.data.ollama_available,
+            models: res.data.local_models || [],
+            defaultModel: res.data.default_local_model || 'llama3.2:3b',
+          });
+        }
+      })
+      .catch((err) => {
+        console.warn('No se pudo verificar el estado de IA:', err);
+      });
+  }, []);
+  useEffect(() => {
+    if (projectId) {
       apiClient.get(`/api/ia/historial/${projectId}/`)
         .then((res) => {
           if (res.data?.success && Array.isArray(res.data.messages)) {
-            const mapped = res.data.messages.map((m: any) => ({
-              id: `msg_db_${m.id}`,
+            const mapped: TeamAiMessage[] = res.data.messages.map((m: any) => ({
+              id: String(m.id).startsWith('msg_') ? String(m.id) : `msg_db_${m.id}`,
               role: m.role,
               senderName: m.sender_name || 'Colaborador',
               senderColor: m.sender_color || '#2563eb',
+              replyToUser: m.reply_to_user || m.replyToUser,
               text: m.text,
               actions: m.actions,
               timestamp: m.created_at
             }));
-            setTeamMessages(mapped);
+
+            setTeamMessages((prev) => {
+              if (prev.length === 0) return mapped;
+              const existingIds = new Set(prev.map((p) => p.id));
+              const missing = mapped.filter((m) => !existingIds.has(m.id));
+              if (missing.length === 0) return prev;
+              const combined = [...prev, ...missing];
+              combined.sort((a, b) => {
+                const ta = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+                const tb = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+                return ta - tb;
+              });
+              return combined;
+            });
           }
         })
         .catch((err) => {
@@ -132,26 +166,43 @@ export const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({
     for (const action of actions) {
       switch (action.type) {
         case 'addNode': {
-          addNodeActions.push({
-            name: action.data.name,
-            stereotype: action.data.stereotype || '',
-            attributes: action.data.attributes || [],
-            methods: action.data.methods || [],
-            position: action.data.position,
-          });
+          const className = (action.data.name || action.data.className || '').trim();
+          const state = useDiagramStore.getState();
+          // Evitar duplicar una clase si ya existe en el lienzo con el mismo nombre
+          const alreadyExists = state.nodes.some(
+            (n) => n.type === 'umlClass' && n.data?.name?.toLowerCase().trim() === className.toLowerCase()
+          );
+
+          if (!alreadyExists && className) {
+            addNodeActions.push({
+              name: className,
+              stereotype: action.data.stereotype || '',
+              attributes: action.data.attributes || [],
+              methods: action.data.methods || [],
+              position: action.data.position,
+            });
+          } else if (alreadyExists) {
+            console.log(`[applyActions] La clase "${className}" ya existe en el lienzo, omitiendo duplicado.`);
+          }
           break;
         }
 
-        case 'addEdge': {
-          addEdgeActions.push({
-            source: action.data.source,
-            target: action.data.target,
-            type: action.data.type || 'association',
-            sourceMultiplicity: action.data.sourceMultiplicity || '',
-            targetMultiplicity: action.data.targetMultiplicity || '',
-            label: action.data.label || '',
-            associationClassName: action.data.associationClassName || '',
-          });
+        case 'addEdge':
+        case 'addAssociation':
+        case 'addRelation': {
+          const source = (action.data.source || action.data.sourceName || action.data.from || '').trim();
+          const target = (action.data.target || action.data.targetName || action.data.to || '').trim();
+          if (source && target) {
+            addEdgeActions.push({
+              source,
+              target,
+              type: action.data.type || action.data.relationType || 'association',
+              sourceMultiplicity: action.data.sourceMultiplicity || '',
+              targetMultiplicity: action.data.targetMultiplicity || '',
+              label: action.data.label || '',
+              associationClassName: action.data.associationClassName || '',
+            });
+          }
           break;
         }
 
@@ -207,9 +258,13 @@ export const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({
         }
 
         case 'modifyNode': {
-          const targetName = action.data.targetName;
-          const existingNode = nodes.find(
-            (n) => n.type === 'umlClass' && n.data?.name?.toLowerCase() === targetName?.toLowerCase()
+          const targetName = (action.data.targetName || action.data.name || action.data.className || '').trim();
+          const state = useDiagramStore.getState();
+          const existingNode = state.nodes.find(
+            (n) =>
+              n.type === 'umlClass' &&
+              (n.data?.name?.toLowerCase().trim() === targetName.toLowerCase() ||
+               n.data?.name?.toLowerCase().replace(/\s+/g, '') === targetName.toLowerCase().replace(/\s+/g, ''))
           );
 
           if (existingNode) {
@@ -282,20 +337,39 @@ export const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({
         }
 
         case 'deleteNode': {
-          const targetName = action.data.targetName;
-          const nodeToDelete = nodes.find(
-            (n) => n.type === 'umlClass' && n.data?.name?.toLowerCase() === targetName?.toLowerCase()
+          const targetName = (action.data.targetName || action.data.name || action.data.className || '').trim();
+          const state = useDiagramStore.getState();
+          // Buscar todos los nodos que coincidan (para eliminar duplicados con el mismo nombre si existen)
+          const matchingNodes = state.nodes.filter(
+            (n) => n.type === 'umlClass' && n.data?.name?.toLowerCase().trim() === targetName.toLowerCase()
           );
-          if (nodeToDelete) {
-            deleteNode(nodeToDelete.id);
+
+          if (matchingNodes.length > 0) {
+            matchingNodes.forEach((node) => {
+              deleteNode(node.id);
+            });
             toast.success(`Clase "${targetName}" eliminada`);
+          } else {
+            // Búsqueda flexible (sin espacios o contenida)
+            const fallbackNode = state.nodes.find(
+              (n) =>
+                n.type === 'umlClass' &&
+                (n.data?.name?.toLowerCase().replace(/\s+/g, '') === targetName.toLowerCase().replace(/\s+/g, '') ||
+                 n.data?.name?.toLowerCase().includes(targetName.toLowerCase()))
+            );
+            if (fallbackNode) {
+              deleteNode(fallbackNode.id);
+              toast.success(`Clase "${fallbackNode.data?.name}" eliminada`);
+            } else {
+              toast.error(`No se encontró la clase "${targetName}" para eliminar`);
+            }
           }
           break;
         }
 
         case 'deleteEdge': {
-          const sourceName = action.data.source;
-          const targetName = action.data.target;
+          const sourceName = (action.data.source || action.data.sourceName || '').trim();
+          const targetName = (action.data.target || action.data.targetName || '').trim();
           const state = useDiagramStore.getState();
 
           const sourceNode = state.nodes.find(
@@ -351,7 +425,7 @@ export const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({
     if (!text || isAiTyping) return;
 
     const diagramContext = buildDiagramContext();
-    const sent = onSendTeamMessage(text, diagramContext);
+    const sent = onSendTeamMessage(text, diagramContext, aiProvider, ollamaInfo.defaultModel || 'llama3.2:3b');
 
     if (sent) {
       setInputText('');
@@ -362,7 +436,9 @@ export const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({
           message: text,
           diagramContext,
           sender_name: currentUsername,
-          project_id: projectId
+          project_id: projectId,
+          provider: aiProvider,
+          local_model: ollamaInfo.defaultModel || 'llama3.2:3b'
         });
         if (res.data?.success) {
           setInputText('');
@@ -374,7 +450,7 @@ export const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({
         toast.error("Error al enviar mensaje");
       }
     }
-  }, [inputText, isAiTyping, buildDiagramContext, onSendTeamMessage, currentUsername, projectId, applyActions]);
+  }, [inputText, isAiTyping, buildDiagramContext, onSendTeamMessage, currentUsername, projectId, applyActions, aiProvider, ollamaInfo.defaultModel]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -481,64 +557,41 @@ export const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({
 
   return (
     <aside className={`ai-assistant-panel ${isOpen ? 'open' : ''}`}>
-      {/* Header compacto con título dinámico */}
+      {/* Header ultra-compacto: Selector de Pestañas y Botón Cerrar en una sola fila */}
       <div className="ai-panel-header">
-        <div className="ai-panel-title">
-          {activeTab === 'history' ? (
-            <>
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <circle cx="12" cy="12" r="10" />
-                <polyline points="12 6 12 12 16 14" />
-              </svg>
-              <span>Historial de Cambios (CU-12)</span>
-            </>
-          ) : (
-            <>
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M12 2a7 7 0 017 7c0 2.38-1.19 4.47-3 5.74V17a2 2 0 01-2 2H10a2 2 0 01-2-2v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 017-7z" />
-                <line x1="10" y1="22" x2="14" y2="22" />
-              </svg>
-              <span>IA Senior Colaborativa</span>
-            </>
-          )}
-        </div>
-        <div className="ai-panel-header-actions">
+        <div className="panel-tab-switcher">
           <button
             type="button"
-            className="ai-panel-close-btn"
-            onClick={onClose}
-            title="Cerrar panel lateral"
+            className={`panel-switch-btn ${activeTab === 'chat' ? 'active' : ''}`}
+            onClick={() => onSwitchTab?.('chat')}
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <line x1="18" y1="6" x2="6" y2="18" />
-              <line x1="6" y1="6" x2="18" y2="18" />
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
+              <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
             </svg>
+            <span>Chat IA</span>
+          </button>
+          <button
+            type="button"
+            className={`panel-switch-btn ${activeTab === 'history' ? 'active' : ''}`}
+            onClick={() => onSwitchTab?.('history')}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
+              <circle cx="12" cy="12" r="10" />
+              <polyline points="12 6 12 12 16 14" />
+            </svg>
+            <span>Historial Diagrama</span>
           </button>
         </div>
-      </div>
-
-      {/* Selector de pestañas: Chat IA Senior vs Historial de Cambios */}
-      <div className="panel-tab-switcher">
         <button
           type="button"
-          className={`panel-switch-btn ${activeTab === 'chat' ? 'active' : ''}`}
-          onClick={() => onSwitchTab?.('chat')}
+          className="ai-panel-close-btn"
+          onClick={onClose}
+          title="Cerrar panel lateral"
         >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
           </svg>
-          <span>Chat IA Senior</span>
-        </button>
-        <button
-          type="button"
-          className={`panel-switch-btn ${activeTab === 'history' ? 'active' : ''}`}
-          onClick={() => onSwitchTab?.('history')}
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <circle cx="12" cy="12" r="10" />
-            <polyline points="12 6 12 12 16 14" />
-          </svg>
-          <span>Historial Diagrama (CU-12)</span>
         </button>
       </div>
 
@@ -546,18 +599,40 @@ export const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({
         <DiagramHistoryAuditPanel projectId={projectId} />
       ) : (
         <>
-          {/* CU-12: Barra de Auditoría de Sesión Continua */}
-          <div className="ai-panel-audit-bar">
-            <div className="ai-audit-status" title="Persistencia continua en tiempo real activada (CU-12)">
+          {/* Barra de estado ultra-compacta: Auditoría de Sala y Selector de Motor en una sola línea */}
+          <div className="ai-panel-compact-bar">
+            <div className="ai-compact-status" title={`Sesión continua activa. ${sessionDaysCount} jornada(s).`}>
               <span className="ai-audit-pulse"></span>
-              <span>CU-12: Sesión Continua</span>
+              <span className="ai-compact-room-tag">Sala #{projectId ?? '1'}</span>
+              <span className="ai-compact-sep">•</span>
+              <span className="ai-compact-events-tag">{teamMessages.length} ev.</span>
             </div>
-            <div className="ai-audit-stats">
-              <span>Sala #{projectId ?? '1'}</span>
-              <span>•</span>
-              <span>{sessionDaysCount} jornada{sessionDaysCount > 1 ? 's' : ''}</span>
-              <span>•</span>
-              <span>{teamMessages.length} evento{teamMessages.length !== 1 ? 's' : ''}</span>
+
+            <div className="ai-compact-engine-group">
+              <button
+                type="button"
+                className={`ai-engine-chip ${aiProvider === 'auto' ? 'active' : ''}`}
+                onClick={() => setAiProvider('auto')}
+                title="Modo Inteligente Híbrido: Local si Ollama está activo; si no, Nube automática"
+              >
+                ⚡ Híbrido
+              </button>
+              <button
+                type="button"
+                className={`ai-engine-chip ${aiProvider === 'local' ? 'active' : ''}`}
+                onClick={() => setAiProvider('local')}
+                title={ollamaInfo.available ? `IA Local privada en tu PC (${ollamaInfo.defaultModel || 'Llama 3.2'})` : 'Ollama no está corriendo en localhost:11434'}
+              >
+                💻 Local {ollamaInfo.available ? '✓' : ''}
+              </button>
+              <button
+                type="button"
+                className={`ai-engine-chip ${aiProvider === 'cloud' ? 'active' : ''}`}
+                onClick={() => setAiProvider('cloud')}
+                title="Inferencia en la Nube con Google Gemini"
+              >
+                ☁️ Nube
+              </button>
             </div>
           </div>
 
@@ -606,6 +681,17 @@ export const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({
           const isAi = msg.role === 'assistant';
           const authorColor = isAi ? '#059669' : (msg.senderColor || '#2563eb');
 
+          // Determinar a qué usuario está respondiendo la IA
+          let replyTo = msg.replyToUser;
+          if (isAi && !replyTo) {
+            for (let i = index - 1; i >= 0; i--) {
+              if (teamMessages[i].role === 'user') {
+                replyTo = teamMessages[i].senderName;
+                break;
+              }
+            }
+          }
+
           const prevMsg = index > 0 ? teamMessages[index - 1] : null;
           const currentDateStr = msg.timestamp ? new Date(msg.timestamp).toDateString() : '';
           const prevDateStr = prevMsg?.timestamp ? new Date(prevMsg.timestamp).toDateString() : '';
@@ -640,53 +726,118 @@ export const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({
                 <div style={{
                   display: 'inline-flex',
                   alignItems: 'center',
-                  gap: '6px',
-                  marginBottom: '3px',
-                  padding: '2px 8px',
-                  borderRadius: '6px',
-                  background: '#f1f5f9',
-                  border: `1px solid ${authorColor}40`,
-                  fontSize: '11px',
+                  gap: '4px',
+                  marginBottom: '2px',
+                  padding: '1px 6px',
+                  borderRadius: '4px',
+                  background: '#f8fafc',
+                  border: `1px solid ${authorColor}35`,
+                  fontSize: '10px',
                   fontWeight: 700,
                   color: authorColor
                 }}>
-                  <span>{isAi ? '🤖 IA Senior (Arquitecto)' : (msg.senderName || 'Colaborador')}</span>
+                  <span>{isAi ? '🤖 IA Senior' : (msg.senderName || 'Colaborador')}</span>
                   {isMe && <span style={{ color: '#64748b', fontWeight: 500 }}>(Tú)</span>}
+                  {isAi && replyTo && (
+                    <span
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '2px',
+                        color: '#047857',
+                        background: '#d1fae5',
+                        border: '1px solid #a7f3d0',
+                        padding: '0 4px',
+                        borderRadius: '3px',
+                        fontSize: '9px',
+                        fontWeight: 700,
+                      }}
+                      title={`Respondiendo a la consulta de ${replyTo}`}
+                    >
+                      <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                        <polyline points="9 10 4 15 9 20" />
+                        <path d="M20 4v7a4 4 0 0 1-4 4H4" />
+                      </svg>
+                      <span>para @{replyTo}</span>
+                    </span>
+                  )}
+                  {isAi && msg.provider === 'local' && (
+                    <span style={{
+                      marginLeft: '2px',
+                      padding: '0 4px',
+                      borderRadius: '3px',
+                      background: '#dcfce7',
+                      color: '#15803d',
+                      fontSize: '9px',
+                      fontWeight: 700,
+                      border: '1px solid #bbf7d0'
+                    }}>
+                      💻 Local ({msg.model || 'Llama 3.2'})
+                    </span>
+                  )}
+                  {isAi && msg.provider === 'cloud' && (
+                    <span style={{
+                      marginLeft: '2px',
+                      padding: '0 4px',
+                      borderRadius: '3px',
+                      background: '#eff6ff',
+                      color: '#1d4ed8',
+                      fontSize: '9px',
+                      fontWeight: 700,
+                      border: '1px solid #bfdbfe'
+                    }}>
+                      ☁️ Nube
+                    </span>
+                  )}
                 </div>
 
                 <div
                   className="ai-message-bubble"
                   style={{
-                    borderLeft: isAi ? '4px solid #10b981' : `4px solid ${authorColor}`,
-                    background: isAi ? '#f0fdf4' : (isMe ? '#eff6ff' : '#ffffff'),
+                    borderLeft: isAi ? '3px solid #10b981' : `3px solid ${authorColor}`,
+                    background: isAi ? '#f8fafc' : (isMe ? '#eff6ff' : '#ffffff'),
                     color: '#0f172a',
-                    boxShadow: '0 1px 3px rgba(0,0,0,0.06)'
+                    boxShadow: '0 1px 2px rgba(0,0,0,0.04)'
                   }}
                 >
+                  {isAi && replyTo && (
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      fontSize: '10.5px',
+                      color: '#059669',
+                      fontWeight: 600,
+                      marginBottom: '4px',
+                      paddingBottom: '3px',
+                      borderBottom: '1px solid #e2e8f0'
+                    }}>
+                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                        <polyline points="9 10 4 15 9 20" />
+                        <path d="M20 4v7a4 4 0 0 1-4 4H4" />
+                      </svg>
+                      <span>Respondiendo a <strong>@{replyTo}</strong>:</span>
+                    </div>
+                  )}
                   <p className="ai-message-text" style={{ whiteSpace: 'pre-wrap', color: '#0f172a' }}>{msg.text}</p>
                   {msg.actions && msg.actions.length > 0 && (
                     <div className="ai-actions-badge applied">
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                         <path d="M20 6L9 17l-5-5" />
                       </svg>
-                      <span>{msg.actions.length} cambio(s) aplicado(s) al canvas del equipo</span>
+                      <span>{msg.actions.length} cambio(s) aplicado(s) al canvas</span>
                     </div>
                   )}
                 </div>
 
                 <div className="ai-message-footer">
                   <span className="ai-message-time" title={msg.timestamp ? new Date(msg.timestamp).toLocaleString('es') : ''}>
-                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ marginRight: 3, verticalAlign: 'middle' }}>
+                    <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ marginRight: 2, verticalAlign: 'middle' }}>
                       <circle cx="12" cy="12" r="10" />
                       <polyline points="12 6 12 12 16 14" />
                     </svg>
                     {msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : ''}
                   </span>
-                  {msg.timestamp && (
-                    <span className="ai-message-date-chip" title="Fecha persistida en BD">
-                      {new Date(msg.timestamp).toLocaleDateString('es', { day: '2-digit', month: '2-digit', year: 'numeric' })}
-                    </span>
-                  )}
                 </div>
               </div>
             </React.Fragment>

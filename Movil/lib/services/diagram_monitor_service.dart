@@ -135,12 +135,42 @@ class DiagramMonitorService with ChangeNotifier {
           _edges = rawEdges
               .map((e) => UmlEdge.fromMap(e as Map<String, dynamic>))
               .toList();
-          _addNotification('Lienzo cargado (${_nodes.length} clases, ${_edges.length} relaciones)');
+          // Estado inicial cargado (no generar notificación de movimiento)
           notifyListeners();
         }
       }
     } catch (e) {
       debugPrint('Error obteniendo diagrama inicial por HTTP: $e');
+    }
+
+    // C. Cargar historial de cambios relevantes iniciales (CU-12)
+    try {
+      final auditUri = Uri.parse('http://$_host/api/projects/$projectId/historial-cambios/');
+      final auditRes = await http.get(auditUri).timeout(const Duration(seconds: 4));
+      if (auditRes.statusCode == 200) {
+        final json = jsonDecode(auditRes.body);
+        final rawAudit = json['historial'] as List? ?? [];
+        for (final item in rawAudit) {
+          final desc = item['descripcion']?.toString() ?? '';
+          final createdAt = item['created_at']?.toString() ?? '';
+          String timeStr = '';
+          try {
+            final dt = DateTime.parse(createdAt).toLocal();
+            timeStr = '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+          } catch (_) {
+            timeStr = '--:--';
+          }
+          if (desc.isNotEmpty) {
+            final formatted = '[$timeStr] $desc';
+            if (!_notifications.contains(formatted)) {
+              _notifications.add(formatted);
+            }
+          }
+        }
+        notifyListeners();
+      }
+    } catch (e) {
+      debugPrint('Error obteniendo auditoría para notificaciones: $e');
     }
   }
 
@@ -177,20 +207,37 @@ class DiagramMonitorService with ChangeNotifier {
       final String type = msg['type']?.toString() ?? '';
 
       switch (type) {
+        case 'audit_change_event':
+          final change = msg['change'] as Map<String, dynamic>? ?? {};
+          final desc = change['descripcion']?.toString() ?? '';
+          if (desc.isNotEmpty) {
+            _addNotification(desc);
+            notifyListeners();
+          }
+          break;
+
         case 'diagram_update':
           final rawNodes = msg['nodes'] as List? ?? [];
           final rawEdges = msg['edges'] as List? ?? [];
           
-          _nodes = rawNodes
+          final newNodes = rawNodes
               .where((n) => n['type'] == 'umlClass')
               .map((n) => UmlClassNode.fromMap(n as Map<String, dynamic>))
               .toList();
 
-          _edges = rawEdges
+          final newEdges = rawEdges
               .map((e) => UmlEdge.fromMap(e as Map<String, dynamic>))
               .toList();
 
-          _addNotification('Diagrama sincronizado (${_nodes.length} clases, ${_edges.length} relaciones)');
+          // Detección inteligente de cambios estructurales (clases, atributos, métodos, relaciones)
+          // Ignora por completo movimientos de posición (drag/move)
+          if (_nodes.isNotEmpty) {
+            _detectStructuralChanges(_nodes, newNodes, _edges, newEdges);
+          }
+
+          _nodes = newNodes;
+          _edges = newEdges;
+
           notifyListeners();
           break;
 
@@ -209,9 +256,7 @@ class DiagramMonitorService with ChangeNotifier {
           _aiTypingFor = null;
 
           if (chatMsg.role == 'assistant') {
-            _addNotification('IA Senior respondió en la sala');
-          } else {
-            _addNotification('${chatMsg.senderName} envió un mensaje');
+            _addNotification('🤖 IA Senior intervino en la sala');
           }
           notifyListeners();
           break;
@@ -240,11 +285,116 @@ class DiagramMonitorService with ChangeNotifier {
     }
   }
 
+  void _detectStructuralChanges(
+    List<UmlClassNode> oldNodes,
+    List<UmlClassNode> newNodes,
+    List<UmlEdge> oldEdges,
+    List<UmlEdge> newEdges,
+  ) {
+    final oldMap = {for (var n in oldNodes) n.id: n};
+    final newMap = {for (var n in newNodes) n.id: n};
+
+    // 1. Clases agregadas
+    for (var n in newNodes) {
+      if (!oldMap.containsKey(n.id)) {
+        _addNotification('Nueva clase agregada: \'${n.name}\'');
+      }
+    }
+
+    // 2. Clases eliminadas
+    for (var n in oldNodes) {
+      if (!newMap.containsKey(n.id)) {
+        _addNotification('Clase eliminada: \'${n.name}\'');
+      }
+    }
+
+    // 3. Modificaciones estructurales en clases existentes
+    for (var entry in newMap.entries) {
+      final oldNode = oldMap[entry.key];
+      final newNode = entry.value;
+      if (oldNode == null) continue;
+
+      // a) Cambio de nombre de clase
+      if (oldNode.name != newNode.name) {
+        _addNotification('Clase renombrada: \'${oldNode.name}\' ➔ \'${newNode.name}\'');
+      }
+
+      // b) Atributos
+      if (newNode.attributes.length > oldNode.attributes.length) {
+        final added = newNode.attributes
+            .where((na) => !oldNode.attributes.any((oa) => oa.name == na.name))
+            .map((a) => a.name)
+            .join(', ');
+        _addNotification('Atributo añadido en \'${newNode.name}\': ${added.isEmpty ? 'nuevo atributo' : added}');
+      } else if (newNode.attributes.length < oldNode.attributes.length) {
+        final removed = oldNode.attributes
+            .where((oa) => !newNode.attributes.any((na) => na.name == oa.name))
+            .map((a) => a.name)
+            .join(', ');
+        _addNotification('Atributo eliminado en \'${newNode.name}\': ${removed.isEmpty ? 'atributo' : removed}');
+      } else {
+        for (int i = 0; i < newNode.attributes.length; i++) {
+          if (i < oldNode.attributes.length) {
+            if (oldNode.attributes[i].name != newNode.attributes[i].name ||
+                oldNode.attributes[i].type != newNode.attributes[i].type) {
+              _addNotification('Atributo modificado en \'${newNode.name}\': ${newNode.attributes[i].name}');
+              break;
+            }
+          }
+        }
+      }
+
+      // c) Métodos
+      if (newNode.methods.length > oldNode.methods.length) {
+        final added = newNode.methods
+            .where((nm) => !oldNode.methods.any((om) => om.name == nm.name))
+            .map((m) => m.name)
+            .join(', ');
+        _addNotification('Método añadido en \'${newNode.name}\': ${added.isEmpty ? 'nuevo método' : '$added()'}');
+      } else if (newNode.methods.length < oldNode.methods.length) {
+        final removed = oldNode.methods
+            .where((om) => !newNode.methods.any((nm) => nm.name == om.name))
+            .map((m) => m.name)
+            .join(', ');
+        _addNotification('Método eliminado en \'${newNode.name}\': ${removed.isEmpty ? 'método' : '$removed()'}');
+      } else {
+        for (int i = 0; i < newNode.methods.length; i++) {
+          if (i < oldNode.methods.length) {
+            if (oldNode.methods[i].name != newNode.methods[i].name) {
+              _addNotification('Método modificado en \'${newNode.name}\': ${newNode.methods[i].name}()');
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    // 4. Relaciones
+    if (newEdges.length > oldEdges.length) {
+      _addNotification('Nueva relación agregada en el diagrama');
+    } else if (newEdges.length < oldEdges.length) {
+      _addNotification('Relación eliminada del diagrama');
+    }
+  }
+
   void _addNotification(String text) {
+    final clean = text.trim();
+    if (clean.isEmpty) return;
+
     final time = DateTime.now();
     final timeStr = '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
-    _notifications.insert(0, '[$timeStr] $text');
-    if (_notifications.length > 30) {
+    final fullText = '[$timeStr] $clean';
+
+    // Evitar notificaciones duplicadas idénticas recientes
+    if (_notifications.isNotEmpty) {
+      final first = _notifications.first;
+      if (first.endsWith(clean) || first.contains(clean)) {
+        return;
+      }
+    }
+
+    _notifications.insert(0, fullText);
+    if (_notifications.length > 50) {
       _notifications.removeLast();
     }
   }

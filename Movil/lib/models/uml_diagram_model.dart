@@ -139,6 +139,8 @@ class TeamChatMessage {
   final String text;
   final String timestamp;
   final List<dynamic>? actions;
+  final String? provider;
+  final String? model;
 
   TeamChatMessage({
     required this.id,
@@ -148,6 +150,8 @@ class TeamChatMessage {
     required this.text,
     required this.timestamp,
     this.actions,
+    this.provider,
+    this.model,
   });
 
   factory TeamChatMessage.fromMap(Map<String, dynamic> map) {
@@ -159,6 +163,8 @@ class TeamChatMessage {
       text: map['text']?.toString() ?? map['message']?.toString() ?? '',
       timestamp: map['timestamp']?.toString() ?? map['created_at']?.toString() ?? DateTime.now().toIso8601String(),
       actions: map['actions'] as List<dynamic>?,
+      provider: map['provider']?.toString(),
+      model: map['model']?.toString(),
     );
   }
 }

@@ -587,13 +587,47 @@ class _DiagramMonitorScreenState extends State<DiagramMonitorScreen> with Single
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text(
-                        isAi ? '🤖 IA Senior (Arquitecto)' : msg.senderName,
-                        style: TextStyle(
-                          color: isAi ? const Color(0xFF15803D) : AppTheme.accentIndigo,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 12,
-                        ),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            isAi ? '🤖 IA Senior' : msg.senderName,
+                            style: TextStyle(
+                              color: isAi ? const Color(0xFF15803D) : AppTheme.accentIndigo,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 12,
+                            ),
+                          ),
+                          if (isAi && msg.provider == 'local') ...[
+                            const SizedBox(width: 4),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFDCFCE7),
+                                borderRadius: BorderRadius.circular(4),
+                                border: Border.all(color: const Color(0xFF86EFAC), width: 0.8),
+                              ),
+                              child: const Text(
+                                '💻 Local',
+                                style: TextStyle(color: Color(0xFF15803D), fontSize: 9, fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                          ] else if (isAi && msg.provider == 'cloud') ...[
+                            const SizedBox(width: 4),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFEFF6FF),
+                                borderRadius: BorderRadius.circular(4),
+                                border: Border.all(color: const Color(0xFFBFDBFE), width: 0.8),
+                              ),
+                              child: const Text(
+                                '☁️ Nube',
+                                style: TextStyle(color: Color(0xFF1D4ED8), fontSize: 9, fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                          ],
+                        ],
                       ),
                       Row(
                         mainAxisSize: MainAxisSize.min,
@@ -651,37 +685,103 @@ class _DiagramMonitorScreenState extends State<DiagramMonitorScreen> with Single
   Widget _buildNotificationsList(DiagramMonitorService monitor) {
     if (monitor.notifications.isEmpty) {
       return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.notifications_none, size: 54, color: AppTheme.textMuted.withValues(alpha: 0.5)),
-            const SizedBox(height: 12),
-            const Text(
-              'No hay notificaciones de actividad aún',
-              style: TextStyle(color: AppTheme.textPrimary, fontSize: 14, fontWeight: FontWeight.w600),
-            ),
-          ],
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 32),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.notifications_none, size: 54, color: AppTheme.textMuted.withValues(alpha: 0.5)),
+              const SizedBox(height: 12),
+              const Text(
+                'No hay notificaciones de cambios aún',
+                style: TextStyle(color: AppTheme.textPrimary, fontSize: 14, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                'Solo se notificarán cambios importantes como crear, renombrar o eliminar clases, atributos, métodos y relaciones.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: AppTheme.textMuted, fontSize: 12, height: 1.3),
+              ),
+            ],
+          ),
         ),
       );
     }
 
     return ListView.separated(
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       itemCount: monitor.notifications.length,
-      separatorBuilder: (_, __) => const Divider(height: 1, color: AppTheme.borderSubtle),
+      separatorBuilder: (_, __) => const SizedBox(height: 8),
       itemBuilder: (context, index) {
         final notif = monitor.notifications[index];
-        return Padding(
-          padding: const EdgeInsets.symmetric(vertical: 8),
+        final lower = notif.toLowerCase();
+
+        IconData icon = Icons.info_outline;
+        Color color = AppTheme.accentIndigo;
+        Color bg = const Color(0xFFEEF2FF);
+
+        if (lower.contains('eliminad') || lower.contains('eliminó')) {
+          icon = Icons.delete_outline;
+          color = const Color(0xFFDC2626);
+          bg = const Color(0xFFFEE2E2);
+        } else if (lower.contains('agregad') ||
+            lower.contains('añadió') ||
+            lower.contains('añadid') ||
+            lower.contains('nueva clase') ||
+            lower.contains('creó') ||
+            lower.contains('reincorporó')) {
+          icon = Icons.add_circle_outline;
+          color = const Color(0xFF16A34A);
+          bg = const Color(0xFFDCFCE7);
+        } else if (lower.contains('renombrad') || lower.contains('modificad') || lower.contains('editad')) {
+          icon = Icons.edit_outlined;
+          color = const Color(0xFFD97706);
+          bg = const Color(0xFFFEF3C7);
+        } else if (lower.contains('relación') || lower.contains('relacion')) {
+          icon = Icons.alt_route;
+          color = const Color(0xFF2563EB);
+          bg = const Color(0xFFEFF6FF);
+        } else if (lower.contains('ia senior')) {
+          icon = Icons.auto_awesome;
+          color = const Color(0xFF059669);
+          bg = const Color(0xFFECFDF5);
+        }
+
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: AppTheme.borderSubtle),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.02),
+                blurRadius: 4,
+                offset: const Offset(0, 1),
+              ),
+            ],
+          ),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Icon(Icons.circle, size: 8, color: AppTheme.accentIndigo),
+              Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: bg,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(icon, size: 16, color: color),
+              ),
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
                   notif,
-                  style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+                  style: const TextStyle(
+                    color: AppTheme.textPrimary,
+                    fontSize: 12.5,
+                    height: 1.35,
+                    fontWeight: FontWeight.w500,
+                  ),
                 ),
               ),
             ],

@@ -9,9 +9,11 @@ from .views import (
     DiagramaExportPumlAPIView,
     DiagramaImportUmlAPIView,
     HistorialCambioDiagramaAPIView,
+    NoSqlStatusAPIView,
 )
 
 urlpatterns = [
+    path('nosql-status/', NoSqlStatusAPIView.as_view(), name='nosql_status'),
     path('', ProyectoListCreateAPIView.as_view(), name='proyecto_list_create'),
     path('join/', ProyectoJoinAPIView.as_view(), name='proyecto_join'),
     path('<int:project_id>/', ProyectoDetailAPIView.as_view(), name='proyecto_detail'),
